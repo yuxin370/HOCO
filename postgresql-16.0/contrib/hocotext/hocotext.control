@@ -1,0 +1,6 @@
+# hocotext extension
+comment = 'data type for Homomorphic Compression Schemes'
+default_version = '1.0'
+module_pathname = '$libdir/hocotext'
+relocatable = true
+trusted = true
