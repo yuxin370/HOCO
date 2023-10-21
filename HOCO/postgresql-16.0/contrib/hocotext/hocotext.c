@@ -14,7 +14,15 @@
 #include "varatt.h"
 #include "fmgr.h"
 #include "access/detoast.h"
-
+#include "access/toast_internals.h"
+#define THRESHOLD 3
+#define repeat_buf_copy(__dp,__str,__count) \
+do{ \
+    for(int i = 0; i < __count; i++){       \
+        *__dp = __str;                      \
+        __dp ++;                            \
+    }\
+}while(0)
 PG_MODULE_MAGIC;
 
 /**
@@ -31,24 +39,29 @@ PG_MODULE_MAGIC;
 */
 
 
+struct varlena *hocotext_fetch_toasted_attr(struct varlena *attr);
+static struct varlena *toast_fetch_datum(struct varlena *attr);
+struct varlena *hocotext_datum_packed(struct varlena *datum);
+
 /*
  * hocotext_*_cmp()
  * Internal comparison function for hocotext strings (and common text strings).
  * Returns int32 negative, zero, or positive.
  */
 
-struct varlena *hocotext_fetch_toasted_attr(struct varlena *attr);
-static struct varlena *toast_fetch_datum(struct varlena *attr);
 
 static int32 hocotext_hoco_cmp(struct varlena * left, struct varlena * right, Oid collid);
 static int32 hocotext_mixed_cmp(struct varlena * left, struct varlena * right, Oid collid);
 static int32 hocotext_common_cmp(struct varlena * left, struct varlena * right, Oid collid);
 
-
-text * hocotext_hoco_extract(struct varlena * source,int32 offset,int32 len);
+/**
+ * internal operation functions
+*/
+text * hocotext_hoco_extract(struct varlena * source,int32 offset,int32 len,Oid collid);
 text * hocotext_hoco_insert(struct varlena * source,int32 offset,text *str);
 text * hocotext_hoco_delete(struct varlena * source,int32 offset,int32 len);
 
+text * hocotext_common_extract(struct varlena * source,int32 offset,int32 len,Oid collid);
 
 
 /**
@@ -66,6 +79,7 @@ PG_FUNCTION_INFO_V1(hocotext_le); // <=
 PG_FUNCTION_INFO_V1(hocotext_gt); // >
 PG_FUNCTION_INFO_V1(hocotext_ge); // >=
 
+PG_FUNCTION_INFO_V1(text_extract);
 PG_FUNCTION_INFO_V1(hocotext_extract);
 PG_FUNCTION_INFO_V1(hocotext_insert);
 PG_FUNCTION_INFO_V1(hocotext_delete);
@@ -93,6 +107,15 @@ PG_FUNCTION_INFO_V1(hocotext_hash);
  * *      UTILITY FUNCTIONS            *
  * *************************************
 */
+
+struct varlena *
+hocotext_datum_packed(struct varlena *datum)
+{
+	if (VARATT_IS_COMPRESSED(datum) || VARATT_IS_EXTERNAL(datum))
+		return hocotext_fetch_toasted_attr(datum);
+	else
+		return datum;
+}
 
 struct varlena *
 hocotext_fetch_toasted_attr(struct varlena *attr)
@@ -205,7 +228,6 @@ toast_fetch_datum(struct varlena *attr)
 
 	/* Close toast table */
 	table_close(toastrel, AccessShareLock);
-
 	return result;
 }
 
@@ -248,8 +270,128 @@ hocotext_common_cmp(struct varlena * left,
 text * 
 hocotext_hoco_extract(struct varlena * source,
                         int32 offset,
-                        int32 len){
-    text *result;
+                        int32 len,
+                        Oid collid){
+    text *result = (text *)palloc(len + VARHDRSZ + 10); 
+	const char *sp;
+	// const char *srcend;
+	char *dp;
+	char *destend;
+    int32 cur_offset = 0; //offset in raw text
+    int32 count = 0;
+    int32 type = 1; // 1: repeated  0: single
+    int32 reach =0;
+    int32 rawsize = VARDATA_COMPRESSED_GET_EXTSIZE(source);
+
+	if (!OidIsValid(collid))
+	{
+		/*
+		 * This typically means that the parser could not resolve a conflict
+		 * of implicit collations, so report it that way.
+		 */
+		ereport(ERROR,
+				(errcode(ERRCODE_INDETERMINATE_COLLATION),
+				 errmsg("could not determine which collation to use for %s function",
+						"hocotext_extract()"),
+				 errhint("Use the COLLATE clause to set the collation explicitly.")));
+	}
+
+
+
+    sp = (char *) source + VARHDRSZ_COMPRESSED;
+    // srcend = (char*) source + VARSIZE(source);
+    
+    if(len < 0){
+        pg_printf("Error: Bad extraction start offset\n");
+        exit(0);
+    }
+    if(len < 0){
+        pg_printf("Error: Bad extraction length\n");
+        exit(0);
+    }
+    
+    dp = VARDATA_ANY(result);
+    destend = VARDATA_ANY(result) + len;
+
+    /**
+     * location the offset
+     */
+    while(cur_offset < offset){
+        type = (int32)(((*sp) >> 7) & 1);
+        count = type == 1 ? (int32)((*sp) & 0x7f) + THRESHOLD : (int32)((*sp) & 0x7f);
+        reach = offset - (count + cur_offset) <= 0 ? 1 : 0;
+        if(type == 1){
+            sp += reach ? 1 : 2; 
+        }else{
+            sp += reach ?  offset - cur_offset + 1 : count + 1; 
+        }
+        count -= reach ? offset - cur_offset : 0;
+        cur_offset += reach ? offset - cur_offset : count ; 
+    }
+    while(cur_offset - offset < len && cur_offset < rawsize){
+        if(sp == source->vl_dat){
+            type = (int32)(((*sp) >> 7)&0x1);
+            count = type == 1 ? (int32)((*sp) & 0x7f) + THRESHOLD : (int32)((*sp) & 0x7f);
+        }
+        if(count + cur_offset - offset > len) count = len + offset - cur_offset;
+        
+        if(type == 1){
+            //repeat
+            repeat_buf_copy(dp,(*sp),count);
+            sp ++ ;
+        }else{
+            //single
+            memcpy(dp,sp,count);
+            dp += count;
+            sp += count;
+        }
+        cur_offset += count;
+        type = (int32)(((*sp) >> 7)&0x1);
+        count = type == 1 ? (int32)((*sp) & 0x7f) + THRESHOLD : (int32)((*sp) & 0x7f);
+        sp++;
+    }
+    *dp = '\0';
+    if(!(dp==destend) || cur_offset == rawsize){
+        pg_printf("Error: wrong extraction result\n");
+        return NULL;
+    }
+    SET_VARSIZE(result,len+VARHDRSZ);
+    return result;
+}
+
+
+text * 
+hocotext_common_extract(struct varlena * source,
+                            int32 offset,
+                            int32 len,
+                            Oid collid){
+    text *result = (text *)palloc(len + VARHDRSZ+10); 
+    char * sp = VARDATA_ANY(source);
+    char * srcend = (char *)source + VARSIZE(source);
+    int32 result_len;
+
+	if (!OidIsValid(collid))
+	{
+		/*
+		 * This typically means that the parser could not resolve a conflict
+		 * of implicit collations, so report it that way.
+		 */
+		ereport(ERROR,
+				(errcode(ERRCODE_INDETERMINATE_COLLATION),
+				 errmsg("could not determine which collation to use for %s function",
+						"hocotext_extract()"),
+				 errhint("Use the COLLATE clause to set the collation explicitly.")));
+	}
+
+
+    if(offset > VARSIZE_ANY_EXHDR(source)){
+        return NULL;
+    }
+    sp += offset;
+    result_len = ((srcend - sp)< len? (srcend - sp):len);
+    memcpy(VARDATA_ANY(result),sp,result_len);
+    *(VARDATA_ANY(result) + result_len) = '\0';
+    SET_VARSIZE(result,result_len+VARHDRSZ);
     return result;
 }
 
@@ -267,6 +409,14 @@ hocotext_hoco_delete(struct varlena * source,
     text *result;
     return result;
 }
+
+
+/**
+ * *************************************
+ * *      INPUT/OUTPUT ROUTINES        *
+ * *************************************
+*/
+
 
 /**
  * *************************************
@@ -562,18 +712,34 @@ hocotext_extract(PG_FUNCTION_ARGS){
     int32 offset = PG_GETARG_INT32(1);
     int32 len = PG_GETARG_INT32(2);
     text *result = NULL;
-    struct varlena *source_str = hocotext_fetch_toasted_attr(source);
-
+    struct varlena *source_str = (text *) hocotext_datum_packed(source);
     /**
      * TO DO
      * extract a substring of length len from the string source at position offset.
     */
-    if(VARATT_IS_COMPRESSED(source)){
-        result = hocotext_hoco_extract(source_str,offset,len);
+    if(VARATT_IS_COMPRESSED(source_str)){
+        result = hocotext_hoco_extract(source_str,offset,len,PG_GET_COLLATION());
     }else{
-        /*result = user defined function for uncompressed text string*/
-        // result = text_substring((*source_str),offset,len,0);
+        result = hocotext_common_extract(source_str,offset,len,PG_GET_COLLATION());
     }
+
+
+   PG_FREE_IF_COPY(source,0);
+
+   PG_RETURN_TEXT_P(result);
+}
+
+Datum
+text_extract(PG_FUNCTION_ARGS){
+    struct varlena *source = PG_GETARG_TEXT_PP(0);
+    int32 offset = PG_GETARG_INT32(1);
+    int32 len = PG_GETARG_INT32(2);
+    text *result = NULL;
+    /**
+     * TO DO
+     * extract a substring of length len from the string source at position offset.
+    */
+    result = hocotext_common_extract(source,offset,len,PG_GET_COLLATION());
 
 
    PG_FREE_IF_COPY(source,0);

@@ -1,0 +1,6 @@
+PGHOME=/home/fanfan/HOCO/postgresql-16.0/target-debug
+export PGDATA=127.0.0.1
+export PGHOST=$PGDATA
+export PGPORT=5432
+export LD_LIBRARY_PATH=$PGHOME/lib
+export PATH+$PGHOME/bin:$PATH
