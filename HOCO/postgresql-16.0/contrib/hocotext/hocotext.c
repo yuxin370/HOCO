@@ -236,11 +236,162 @@ hocotext_hoco_cmp(struct varlena * left,
                     struct varlena * right, 
                     Oid collid)
 {
-    /**
-     * TO DO
-     * comparison between compressed attrs
-    */
-    return 1;
+
+    char *lefp;
+    char *lefend;
+	char *righp;
+    char *righend;
+    char* cur_lef = (char *)palloc(131);
+    char* cur_righ = (char *)palloc(131);
+    char *cur_lef_p = cur_lef;
+    char *cur_righ_p = cur_righ;
+    int32 lef_count = 0;
+    int32 righ_count = 0;
+
+	if (!OidIsValid(collid))
+	{
+		/*
+		 * This typically means that the parser could not resolve a conflict
+		 * of implicit collations, so report it that way.
+		 */
+		ereport(ERROR,
+				(errcode(ERRCODE_INDETERMINATE_COLLATION),
+				 errmsg("could not determine which collation to use for %s function",
+						"hocotext_extract()"),
+				 errhint("Use the COLLATE clause to set the collation explicitly.")));
+	}
+
+    lefp = (char *) left + VARHDRSZ_COMPRESSED;
+    righp = (char *) right + VARHDRSZ_COMPRESSED;
+    lefend = (char *) left + VARSIZE_ANY(left);
+    righend = (char *) right + VARSIZE_ANY(right);
+    // lefend = (char *) left + VARDATA_COMPRESSED_GET_EXTSIZE(left);
+    // righend = (char *) right + VARDATA_COMPRESSED_GET_EXTSIZE(right);
+
+    
+
+    // printf("\t\t[TYX LOG]\t\t:in rle hoco cmp\n");
+    // printf("\t\t[TYX LOG]\t\t:left = %s size = %d\n",lefp,VARDATA_COMPRESSED_GET_EXTSIZE(left));
+    // printf("\t\t[TYX LOG]\t\t:right = %s size = %d\n",righp,VARDATA_COMPRESSED_GET_EXTSIZE(right));
+
+    while(lefp < lefend && righp < righend){
+        // printf("[ before ] left : %d(%d[%d]) %s  right : %d(%d[%d]) %s\n",lef_count,(lefp-(char *)left),(lefend-(char *)left),cur_lef_p,righ_count,(righp-(char *)right),(righend-(char *)right),cur_righ_p);
+        if(lef_count == 0){
+            lef_count =  (0x1&((*lefp) >> 7)) == 1 ? (int32)((*lefp) & 0x7f) + THRESHOLD :  (int32)((*lefp) & 0x7f);
+            if((0x1&((*lefp) >> 7)) == 1) {
+                lefp ++;
+                cur_lef_p = cur_lef;
+                repeat_buf_copy(cur_lef_p,(*(lefp)),lef_count);
+                *cur_lef_p = '\0';
+                lefp++;
+            }else{
+                lefp++;
+                memcpy(cur_lef,(lefp),lef_count);
+                *(cur_lef + lef_count) = '\0';
+                lefp += lef_count;
+            }
+            cur_lef_p = cur_lef;
+        }
+
+        if(righ_count == 0){
+            righ_count =  (0x1&((*righp) >> 7)) == 1 ? (int32)((*righp) & 0x7f) + THRESHOLD :  (int32)((*righp) & 0x7f);
+            if((0x1&((*righp) >> 7)) == 1) {
+                righp ++;
+                cur_righ_p = cur_righ;
+                repeat_buf_copy(cur_righ_p,(*(righp)),righ_count);
+                *cur_righ_p = '\0';
+                righp++;
+            }else{
+                righp++;
+                memcpy(cur_righ,(righp),righ_count);
+                *(cur_righ + righ_count) = '\0';
+                righp += righ_count;
+            }
+            cur_righ_p = cur_righ;
+        }
+        
+        // printf("[ before ] left : %d(%d[%d]) %s  right : %d(%d[%d]) %s\n",lef_count,(lefp-(char *)left),(lefend-(char *)left),cur_lef_p,righ_count,(righp-(char *)right),(righend-(char *)right),cur_righ_p);
+        // printf("[ after ] left : %d(%d[%d]) %s  right : %d(%d[%d]) %s\n",lef_count,(lefp-left),(lefend-left),cur_lef_p,righ_count,(righp-right),(righend-right),cur_righ_p);
+
+
+        while(lef_count >0 && righ_count > 0){
+            // printf("%c   %c\n",(*cur_lef_p),(*cur_righ_p));
+            if((*cur_lef_p) == (*cur_righ_p)){
+                cur_lef_p ++;
+                cur_righ_p++;
+                lef_count --;
+                righ_count --;
+            }else{
+                return (*cur_lef_p) > (*cur_righ_p) ? 1 :  ((*cur_lef_p) == (*cur_righ_p) ? 0 : -1);
+            }
+        }
+    }
+    
+    while(lefp < lefend && righ_count > 0){
+        if(lef_count == 0){
+            lef_count =  (0x1&((*lefp) >> 7)) == 1 ? (int32)((*lefp) & 0x7f) + THRESHOLD :  (int32)((*lefp) & 0x7f);
+            if((0x1&((*lefp) >> 7)) == 1) {
+                lefp ++;
+                cur_lef_p = cur_lef;
+                repeat_buf_copy(cur_lef_p,(*(lefp)),lef_count);
+                *cur_lef_p = '\0';
+                lefp++;
+            }else{
+                lefp++;
+                memcpy(cur_lef,(lefp),lef_count);
+                lefp += lef_count;
+            }
+            cur_lef_p = cur_lef;
+        }
+        while(lef_count >0 && righ_count > 0){
+            // printf("%c   %c\n",(*cur_lef_p),(*cur_righ_p));
+            if((*cur_lef_p) == (*cur_righ_p)){
+                cur_lef_p ++;
+                cur_righ_p++;
+                lef_count --;
+                righ_count --;
+            }else{
+                return (*cur_lef_p) > (*cur_righ_p) ? 1 :  ((*cur_lef_p) == (*cur_righ_p) ? 0 : -1);
+            }
+        }
+    }
+
+    while(righp < righend && lef_count > 0){
+
+        if(righ_count == 0){
+            righ_count =  (0x1&((*righp) >> 7)) == 1 ? (int32)((*righp) & 0x7f) + THRESHOLD :  (int32)((*righp) & 0x7f);
+            if((0x1&((*righp) >> 7)) == 1) {
+                righp ++;
+                cur_righ_p = cur_righ;
+                repeat_buf_copy(cur_righ_p,(*(righp)),righ_count);
+                *cur_righ_p = '\0';
+                righp++;
+            }else{
+                righp++;
+                memcpy(cur_righ,(righp),righ_count);
+                *(cur_righ + righ_count) = '\0';
+                righp += righ_count;
+            }
+            cur_righ_p = cur_righ;
+        }
+        while(lef_count >0 && righ_count > 0){
+            // printf("%c   %c\n",(*cur_lef_p),(*cur_righ_p));
+
+            if((*cur_lef_p) == (*cur_righ_p)){
+                cur_lef_p ++;
+                cur_righ_p++;
+                lef_count --;
+                righ_count --;
+            }else{
+                return (*cur_lef_p) > (*cur_righ_p) ? 1 :  ((*cur_lef_p) == (*cur_righ_p) ? 0 : -1);
+            }
+        }
+    }
+
+    if(lefp < lefend || lef_count > 0) return 1;
+    else if(righp < righend || righ_count > 0) return -1;
+    else return 0;
+
 }
 
 static int32 
@@ -248,11 +399,92 @@ hocotext_mixed_cmp(struct varlena * left,
                     struct varlena * right, 
                     Oid collid)
 {
-    /**
-     * TO DO
-     * comparison between compressed attr and uncompressed attr
+    /*
+        left is compressed and right is uncompressed.
     */
-    return 1;
+    int exchange = false;
+    char * righp;
+    char * righend;
+    char * lefp;
+    char * lefend;
+
+    char* cur_lef = (char *)palloc(131);
+    char *cur_lef_p = cur_lef;
+    int lef_count = 0;
+
+    if(!VARATT_IS_COMPRESSED(left) && VARATT_IS_COMPRESSED(right)){
+        exchange = true;
+        lefp = (char *) right + VARHDRSZ_COMPRESSED;
+        lefend = (char *) right + VARSIZE_ANY(right);
+        righp = VARDATA_ANY(left);
+        righend = (char *)left + VARSIZE(left);
+    }else{
+        lefp = (char *) left + VARHDRSZ_COMPRESSED;
+        lefend = (char *) left + VARSIZE_ANY(left);
+        righp = VARDATA_ANY(right);
+        righend = (char *)right + VARSIZE(right);
+    }
+    // printf("\t\t[TYX LOG]\t\t:in rle mixed cmp\n");
+    // printf("\t\t[TYX LOG]\t\t:left = %s\n",lefp);
+    // printf("\t\t[TYX LOG]\t\t:right = %s\n",righp);
+	if (!OidIsValid(collid))
+	{
+		/*
+		 * This typically means that the parser could not resolve a conflict
+		 * of implicit collations, so report it that way.
+		 */
+		ereport(ERROR,
+				(errcode(ERRCODE_INDETERMINATE_COLLATION),
+				 errmsg("could not determine which collation to use for %s function",
+						"hocotext_extract()"),
+				 errhint("Use the COLLATE clause to set the collation explicitly.")));
+	}
+
+    while(lefp < lefend && righp < righend){
+        if(lef_count == 0){
+            lef_count =  (0x1&((*lefp) >> 7)) == 1 ? (int)((*lefp) & 0x7f) + THRESHOLD :  (int)((*lefp) & 0x7f);
+            if((0x1&((*lefp) >> 7)) == 1) {
+                lefp ++;
+                cur_lef_p = cur_lef;
+                repeat_buf_copy(cur_lef_p,(*(lefp)),lef_count);
+                *cur_lef_p = '\0';
+
+                lefp++;
+            }else{
+                lefp++;
+                memcpy(cur_lef,(lefp),lef_count);
+                *(cur_lef + lef_count) = '\0';
+                lefp += lef_count;
+            }
+            cur_lef_p = cur_lef;
+        }
+
+
+        while(lef_count >0 && righp < righend){
+            if((*cur_lef_p) == (*righp)){
+                cur_lef_p ++;
+                lef_count --;
+                righp ++;
+            }else{
+                return exchange ? ((*cur_lef_p) > (*righp) ? -1 :  ((*cur_lef_p) == (*righp) ? 0 : 1)) : ((*cur_lef_p) > (*righp) ? 1 :  ((*cur_lef_p) == (*righp) ? 0 : -1));
+            }
+        }
+    }
+
+    while(righp < righend && lef_count > 0){
+        if((*cur_lef_p) == (*righp)){
+            cur_lef_p ++;
+            lef_count --;
+            righp ++;
+        }else{
+            return exchange ? ((*cur_lef_p) > (*righp) ? -1 :  ((*cur_lef_p) == (*righp) ? 0 : 1)) : ((*cur_lef_p) > (*righp) ? 1 :  ((*cur_lef_p) == (*righp) ? 0 : -1));
+        }
+    }
+
+    if(lefp < lefend || lef_count > 0) return exchange ? -1 : 1;
+    else if(righp < righend) return exchange ? 1 : -1;
+    else return 0;
+
 }
 
 static int32 
@@ -260,11 +492,45 @@ hocotext_common_cmp(struct varlena * left,
                     struct varlena * right, 
                     Oid collid)
 {
-    /**
-     * TO DO
-     * comparison between uncompressed attrs
-    */
-    return 1;
+    char * lefp = VARDATA_ANY(left);
+    char * lefend = (char *)left + VARSIZE_ANY(left);
+    
+    char * righp = VARDATA_ANY(right);
+    char * righend = (char *)right + VARSIZE_ANY(right);
+
+
+    // printf("\t\t[TYX LOG]\t\t:in rle common cmp\n");
+    // printf("\t\t[TYX LOG]\t\t:left = %s size = %d\n",lefp,VARSIZE_ANY(left));
+    // printf("\t\t[TYX LOG]\t\t:right = %s size = %d\n",righp,VARSIZE_ANY(right));
+	if (!OidIsValid(collid))
+	{
+		/*
+		 * This typically means that the parser could not resolve a conflict
+		 * of implicit collations, so report it that way.
+		 */
+		ereport(ERROR,
+				(errcode(ERRCODE_INDETERMINATE_COLLATION),
+				 errmsg("could not determine which collation to use for %s function",
+						"hocotext_extract()"),
+				 errhint("Use the COLLATE clause to set the collation explicitly.")));
+	}
+
+    while(lefp < lefend && righp < righend){
+        // printf("[ next ] left :  %s  right :  %s\n",(*lefp),(*righp));
+        // printf("[ next ] left : (%d[%d]) %s  right : (%d[%d]) %s\n",(lefp),(lefend),(*lefp),(righp),(righend),(*righp));
+
+        if((*lefp) == (*righp)){
+            lefp ++;
+            righp ++;
+            continue;
+        }
+        return (*lefp) > (*righp) ? 1 :  ((*lefp) == (*righp) ? 0 : -1); 
+    }
+
+    if(lefp < lefend) return 1;
+    else if(righp < righend) return -1;
+    else return 0;
+
 }
 
 text * 
@@ -435,10 +701,10 @@ hocotext_eq(PG_FUNCTION_ARGS){
      * case 2: only one arg is compressed
      * case 3: both left and right are uncompressed
     */
-    bool is_comp_lef = VARATT_IS_COMPRESSED(left);
-    bool is_comp_righ = VARATT_IS_COMPRESSED(right);
-    struct varlena *left_datum = hocotext_fetch_toasted_attr(left);
-    struct varlena *right_datum = hocotext_fetch_toasted_attr(right);
+    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
+    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
+    bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
         /**
          * case 1: both left and right are compressed
@@ -460,11 +726,11 @@ hocotext_eq(PG_FUNCTION_ARGS){
         * uncompressed datum vs uncompressed datum
         */
 
-        result = (hocotext_common_cmp((text *)left_datum,(text *)right_datum,PG_GET_COLLATION()) == 0);
+        result = (hocotext_common_cmp(left_datum,right_datum,PG_GET_COLLATION()) == 0);
 
     }
-	pfree(left_datum);
-	pfree(right_datum);
+	// pfree(left_datum);
+	// pfree(right_datum);
 	PG_FREE_IF_COPY(left, 0);
 	PG_FREE_IF_COPY(right, 1);
 
@@ -482,10 +748,10 @@ hocotext_nq(PG_FUNCTION_ARGS){
      * case 2: only one arg is compressed
      * case 3: both left and right are uncompressed
     */
-    bool is_comp_lef = VARATT_IS_COMPRESSED(left);
-    bool is_comp_righ = VARATT_IS_COMPRESSED(right);
-    struct varlena *left_datum = hocotext_fetch_toasted_attr(left);
-    struct varlena *right_datum = hocotext_fetch_toasted_attr(right);
+    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
+    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
+    bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
         /**
          * case 1: both left and right are compressed
@@ -507,11 +773,11 @@ hocotext_nq(PG_FUNCTION_ARGS){
         * uncompressed datum vs uncompressed datum
         */
 
-        result = (hocotext_common_cmp((text *)left_datum,(text *)right_datum,PG_GET_COLLATION()) != 0);
+        result = (hocotext_common_cmp(left_datum,right_datum,PG_GET_COLLATION()) != 0);
 
     }
-	pfree(left_datum);
-	pfree(right_datum);
+	// pfree(left_datum);
+	// pfree(right_datum);
 	PG_FREE_IF_COPY(left, 0);
 	PG_FREE_IF_COPY(right, 1);
 
@@ -529,10 +795,10 @@ hocotext_lt(PG_FUNCTION_ARGS){
      * case 2: only one arg is compressed
      * case 3: both left and right are uncompressed
     */
-    bool is_comp_lef = VARATT_IS_COMPRESSED(left);
-    bool is_comp_righ = VARATT_IS_COMPRESSED(right);
-    struct varlena *left_datum = hocotext_fetch_toasted_attr(left);
-    struct varlena *right_datum = hocotext_fetch_toasted_attr(right);
+    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
+    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
+    bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
         /**
          * case 1: both left and right are compressed
@@ -554,11 +820,11 @@ hocotext_lt(PG_FUNCTION_ARGS){
         * uncompressed datum vs uncompressed datum
         */
 
-        result = (hocotext_common_cmp((text *)left_datum,(text *)right_datum,PG_GET_COLLATION()) < 0);
+        result = (hocotext_common_cmp(left_datum,right_datum,PG_GET_COLLATION()) < 0);
 
     }
-	pfree(left_datum);
-	pfree(right_datum);
+	// pfree(left_datum);
+	// pfree(right_datum);
 	PG_FREE_IF_COPY(left, 0);
 	PG_FREE_IF_COPY(right, 1);
 
@@ -576,10 +842,10 @@ hocotext_le(PG_FUNCTION_ARGS){
      * case 2: only one arg is compressed
      * case 3: both left and right are uncompressed
     */
-    bool is_comp_lef = VARATT_IS_COMPRESSED(left);
-    bool is_comp_righ = VARATT_IS_COMPRESSED(right);
-    struct varlena *left_datum = hocotext_fetch_toasted_attr(left);
-    struct varlena *right_datum = hocotext_fetch_toasted_attr(right);
+    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
+    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
+    bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
         /**
          * case 1: both left and right are compressed
@@ -601,11 +867,11 @@ hocotext_le(PG_FUNCTION_ARGS){
         * uncompressed datum vs uncompressed datum
         */
 
-        result = (hocotext_common_cmp((text *)left_datum,(text *)right_datum,PG_GET_COLLATION()) <= 0);
+        result = (hocotext_common_cmp(left_datum,right_datum,PG_GET_COLLATION()) <= 0);
 
     }
-	pfree(left_datum);
-	pfree(right_datum);
+	// pfree(left_datum);
+	// pfree(right_datum);
 	PG_FREE_IF_COPY(left, 0);
 	PG_FREE_IF_COPY(right, 1);
 
@@ -623,10 +889,10 @@ hocotext_gt(PG_FUNCTION_ARGS){
      * case 2: only one arg is compressed
      * case 3: both left and right are uncompressed
     */
-    bool is_comp_lef = VARATT_IS_COMPRESSED(left);
-    bool is_comp_righ = VARATT_IS_COMPRESSED(right);
-    struct varlena *left_datum = hocotext_fetch_toasted_attr(left);
-    struct varlena *right_datum = hocotext_fetch_toasted_attr(right);
+    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
+    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
+    bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
         /**
          * case 1: both left and right are compressed
@@ -648,11 +914,11 @@ hocotext_gt(PG_FUNCTION_ARGS){
         * uncompressed datum vs uncompressed datum
         */
 
-        result = (hocotext_common_cmp((text *)left_datum,(text *)right_datum,PG_GET_COLLATION()) > 0);
+        result = (hocotext_common_cmp(left_datum,right_datum,PG_GET_COLLATION()) > 0);
 
     }
-	pfree(left_datum);
-	pfree(right_datum);
+	// pfree(left_datum);
+	// pfree(right_datum);
 	PG_FREE_IF_COPY(left, 0);
 	PG_FREE_IF_COPY(right, 1);
 
@@ -670,10 +936,11 @@ hocotext_ge(PG_FUNCTION_ARGS){
      * case 2: only one arg is compressed
      * case 3: both left and right are uncompressed
     */
-    bool is_comp_lef = VARATT_IS_COMPRESSED(left);
-    bool is_comp_righ = VARATT_IS_COMPRESSED(right);
-    struct varlena *left_datum = hocotext_fetch_toasted_attr(left);
-    struct varlena *right_datum = hocotext_fetch_toasted_attr(right);
+
+    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
+    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
+    bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
         /**
          * case 1: both left and right are compressed
@@ -695,11 +962,11 @@ hocotext_ge(PG_FUNCTION_ARGS){
         * uncompressed datum vs uncompressed datum
         */
 
-        result = (hocotext_common_cmp((text *)left_datum,(text *)right_datum,PG_GET_COLLATION()) >= 0);
+        result = (hocotext_common_cmp(left_datum,right_datum,PG_GET_COLLATION()) >= 0);
 
     }
-	pfree(left_datum);
-	pfree(right_datum);
+	// pfree(left_datum);
+	// pfree(right_datum);
 	PG_FREE_IF_COPY(left, 0);
 	PG_FREE_IF_COPY(right, 1);
 
@@ -816,10 +1083,10 @@ hocotext_smaller(PG_FUNCTION_ARGS){
      * case 2: only one arg is compressed
      * case 3: both left and right are uncompressed
     */
-    bool is_comp_lef = VARATT_IS_COMPRESSED(left);
-    bool is_comp_righ = VARATT_IS_COMPRESSED(right);
-    struct varlena *left_datum = hocotext_fetch_toasted_attr(left);
-    struct varlena *right_datum = hocotext_fetch_toasted_attr(right);
+    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
+    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
+    bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
         /**
          * case 1: both left and right are compressed
@@ -844,8 +1111,8 @@ hocotext_smaller(PG_FUNCTION_ARGS){
         result = (hocotext_common_cmp((text *)left_datum,(text *)right_datum,PG_GET_COLLATION()) < 0 ? left_datum : right_datum);
 
     }
-	pfree(left_datum);
-	pfree(right_datum);
+	// pfree(left_datum);
+	// pfree(right_datum);
 	PG_FREE_IF_COPY(left, 0);
 	PG_FREE_IF_COPY(right, 1);
 
@@ -864,10 +1131,10 @@ hocotext_larger(PG_FUNCTION_ARGS){
      * case 2: only one arg is compressed
      * case 3: both left and right are uncompressed
     */
-    bool is_comp_lef = VARATT_IS_COMPRESSED(left);
-    bool is_comp_righ = VARATT_IS_COMPRESSED(right);
-    struct varlena *left_datum = hocotext_fetch_toasted_attr(left);
-    struct varlena *right_datum = hocotext_fetch_toasted_attr(right);
+    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
+    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
+    bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
         /**
          * case 1: both left and right are compressed
@@ -892,8 +1159,8 @@ hocotext_larger(PG_FUNCTION_ARGS){
         result = (hocotext_common_cmp((text *)left_datum,(text *)right_datum,PG_GET_COLLATION()) > 0 ? left_datum : right_datum);
 
     }
-	pfree(left_datum);
-	pfree(right_datum);
+	// pfree(left_datum);
+	// pfree(right_datum);
 	PG_FREE_IF_COPY(left, 0);
 	PG_FREE_IF_COPY(right, 1);
 
@@ -921,10 +1188,10 @@ hocotext_cmp(PG_FUNCTION_ARGS){
      * case 2: only one arg is compressed
      * case 3: both left and right are uncompressed
     */
-    bool is_comp_lef = VARATT_IS_COMPRESSED(left);
-    bool is_comp_righ = VARATT_IS_COMPRESSED(right);
-    struct varlena *left_datum = hocotext_fetch_toasted_attr(left);
-    struct varlena *right_datum = hocotext_fetch_toasted_attr(right);
+    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
+    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
+    bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
         /**
          * case 1: both left and right are compressed
@@ -950,8 +1217,8 @@ hocotext_cmp(PG_FUNCTION_ARGS){
         result = hocotext_common_cmp((text *)left_datum,(text *)right_datum,PG_GET_COLLATION());
 
     }
-	pfree(left_datum);
-	pfree(right_datum);
+	// pfree(left_datum);
+	// pfree(right_datum);
 	PG_FREE_IF_COPY(left, 0);
 	PG_FREE_IF_COPY(right, 1);
 
