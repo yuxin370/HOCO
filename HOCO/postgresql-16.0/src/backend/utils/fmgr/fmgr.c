@@ -1840,6 +1840,21 @@ pg_detoast_datum_packed(struct varlena *datum)
 		return datum;
 }
 
+/**
+ * Yuxin Tang 
+ * 2024.1.3
+*/
+struct varlena *
+pg_detoast_datum_packed_without_decompression(struct varlena *datum)
+{
+	if (VARATT_IS_COMPRESSED(datum) || VARATT_IS_EXTERNAL(datum))
+		return detoast_attr_without_decompression(datum);
+	else
+		return datum;
+}
+
+
+
 /*-------------------------------------------------------------------------
  *		Support routines for extracting info from fn_expr parse tree
  *

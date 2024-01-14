@@ -345,7 +345,7 @@ GetCompressionMethodName(char method)
  * Return the compressed varlena, or NULL if compression fails.
 */
 struct varlena *
-rle_compress_datum(const struct varlena *value)
+rle_compress_datum(const struct varlena *value,Oid oid,int32 tuples)
 {
 
 	int32		valsize,
@@ -375,7 +375,9 @@ rle_compress_datum(const struct varlena *value)
 	len = rle_compress(VARDATA_ANY(value),
 						valsize,
 						(char *) tmp + VARHDRSZ_COMPRESSED,
-						NULL);
+						NULL,
+						oid,
+						tuples);
 	if (len < 0)
 	{
 		pfree(tmp);

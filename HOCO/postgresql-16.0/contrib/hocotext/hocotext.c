@@ -4,6 +4,7 @@
 #include "postgres.h"
 
 #include "catalog/pg_collation.h"
+#include "catalog/pg_compression_index.h"
 #include "common/hashfn.h"
 #include "utils/builtins.h"
 #include "utils/formatting.h"
@@ -15,6 +16,7 @@
 #include "fmgr.h"
 #include "access/detoast.h"
 #include "access/toast_internals.h"
+#include "postgres_ext.h"
 #define THRESHOLD 3
 #define repeat_buf_copy(__dp,__str,__count) \
 do{ \
@@ -38,17 +40,11 @@ PG_MODULE_MAGIC;
  * utility functions
 */
 
-
-struct varlena *hocotext_fetch_toasted_attr(struct varlena *attr);
-static struct varlena *toast_fetch_datum(struct varlena *attr);
-struct varlena *hocotext_datum_packed(struct varlena *datum);
-
 /*
  * hocotext_*_cmp()
  * Internal comparison function for hocotext strings (and common text strings).
  * Returns int32 negative, zero, or positive.
  */
-
 
 static int32 hocotext_hoco_cmp(struct varlena * left, struct varlena * right, Oid collid);
 static int32 hocotext_mixed_cmp(struct varlena * left, struct varlena * right, Oid collid);
@@ -62,6 +58,7 @@ text * hocotext_hoco_insert(struct varlena * source,int32 offset,text *str);
 text * hocotext_hoco_delete(struct varlena * source,int32 offset,int32 len);
 
 text * hocotext_common_extract(struct varlena * source,int32 offset,int32 len,Oid collid);
+text * hocotext_hoco_extract_with_index_optimization(struct varlena * source,int32 offset,int32 len,Oid collid);
 
 
 /**
@@ -81,6 +78,7 @@ PG_FUNCTION_INFO_V1(hocotext_ge); // >=
 
 PG_FUNCTION_INFO_V1(text_extract);
 PG_FUNCTION_INFO_V1(hocotext_extract);
+PG_FUNCTION_INFO_V1(hocotext_extract_optimized);
 PG_FUNCTION_INFO_V1(hocotext_insert);
 PG_FUNCTION_INFO_V1(hocotext_delete);
 
@@ -108,128 +106,6 @@ PG_FUNCTION_INFO_V1(hocotext_hash);
  * *************************************
 */
 
-struct varlena *
-hocotext_datum_packed(struct varlena *datum)
-{
-	if (VARATT_IS_COMPRESSED(datum) || VARATT_IS_EXTERNAL(datum))
-		return hocotext_fetch_toasted_attr(datum);
-	else
-		return datum;
-}
-
-struct varlena *
-hocotext_fetch_toasted_attr(struct varlena *attr)
-{
-	if (VARATT_IS_EXTERNAL_ONDISK(attr))
-	{
-		/*
-		 * This is an externally stored datum --- fetch it back from there
-		 */
-		attr = toast_fetch_datum(attr);
-		/* If it's compressed, do nothing */
-
-	}
-	else if (VARATT_IS_EXTERNAL_INDIRECT(attr))
-	{
-		/*
-		 * This is an indirect pointer --- dereference it
-		 */
-		struct varatt_indirect redirect;
-
-		VARATT_EXTERNAL_GET_POINTER(redirect, attr);
-		attr = (struct varlena *) redirect.pointer;
-
-		/* nested indirect Datums aren't allowed */
-		Assert(!VARATT_IS_EXTERNAL_INDIRECT(attr));
-
-		/* recurse in case value is still extended in some other way */
-		attr = hocotext_fetch_toasted_attr(attr);
-
-		/* if it isn't, we'd better copy it */
-		if (attr == (struct varlena *) redirect.pointer)
-		{
-			struct varlena *result;
-
-			result = (struct varlena *) palloc(VARSIZE_ANY(attr));
-			memcpy(result, attr, VARSIZE_ANY(attr));
-			attr = result;
-		}
-	}
-	else if (VARATT_IS_EXTERNAL_EXPANDED(attr))
-	{
-		/*
-		 * This is an expanded-object pointer --- get flat format
-		 */
-		attr = detoast_external_attr(attr);
-		/* flatteners are not allowed to produce compressed/short output */
-		Assert(!VARATT_IS_EXTENDED(attr));
-	}
-	else if (VARATT_IS_COMPRESSED(attr))
-	{
-		/*
-		 * This is a compressed value inside of the main tuple
-		 */
-		// attr = toast_decompress_datum(attr);
-        // do nothing
-	}
-	else if (VARATT_IS_SHORT(attr))
-	{
-		/*
-		 * This is a short-header varlena --- convert to 4-byte header format
-		 */
-		Size		data_size = VARSIZE_SHORT(attr) - VARHDRSZ_SHORT;
-		Size		new_size = data_size + VARHDRSZ;
-		struct varlena *new_attr;
-
-		new_attr = (struct varlena *) palloc(new_size);
-		SET_VARSIZE(new_attr, new_size);
-		memcpy(VARDATA(new_attr), VARDATA_SHORT(attr), data_size);
-		attr = new_attr;
-	}
-
-	return attr;
-}
-
-static struct varlena *
-toast_fetch_datum(struct varlena *attr)
-{
-	Relation	toastrel;
-	struct varlena *result;
-	struct varatt_external toast_pointer;
-	int32		attrsize;
-
-	if (!VARATT_IS_EXTERNAL_ONDISK(attr))
-		elog(ERROR, "toast_fetch_datum shouldn't be called for non-ondisk datums");
-
-	/* Must copy to access aligned fields */
-	VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
-
-	attrsize = VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer);
-
-	result = (struct varlena *) palloc(attrsize + VARHDRSZ);
-
-	if (VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer))
-		SET_VARSIZE_COMPRESSED(result, attrsize + VARHDRSZ);
-	else
-		SET_VARSIZE(result, attrsize + VARHDRSZ);
-
-	if (attrsize == 0)
-		return result;			/* Probably shouldn't happen, but just in
-								 * case. */
-
-	/*
-	 * Open the toast relation and its indexes
-	 */
-	toastrel = table_open(toast_pointer.va_toastrelid, AccessShareLock);
-
-	/* Fetch all chunks */
-	table_relation_fetch_toast_slice(toastrel, toast_pointer.va_valueid,
-									 attrsize, 0, attrsize, result);
-
-	/* Close toast table */
-	table_close(toastrel, AccessShareLock);
-	return result;
-}
 
 static int32 
 hocotext_hoco_cmp(struct varlena * left, 
@@ -257,25 +133,17 @@ hocotext_hoco_cmp(struct varlena * left,
 		ereport(ERROR,
 				(errcode(ERRCODE_INDETERMINATE_COLLATION),
 				 errmsg("could not determine which collation to use for %s function",
-						"hocotext_extract()"),
+						"hocotext_cmp()"),
 				 errhint("Use the COLLATE clause to set the collation explicitly.")));
 	}
 
-    lefp = (char *) left + VARHDRSZ_COMPRESSED;
-    righp = (char *) right + VARHDRSZ_COMPRESSED;
+    lefp = (char *) left + VARHDRSZ_COMPRESSED + 8; // jump over 8 byte index info 
+    righp = (char *) right + VARHDRSZ_COMPRESSED + 8;
     lefend = (char *) left + VARSIZE_ANY(left);
     righend = (char *) right + VARSIZE_ANY(right);
-    // lefend = (char *) left + VARDATA_COMPRESSED_GET_EXTSIZE(left);
-    // righend = (char *) right + VARDATA_COMPRESSED_GET_EXTSIZE(right);
 
-    
-
-    // printf("\t\t[TYX LOG]\t\t:in rle hoco cmp\n");
-    // printf("\t\t[TYX LOG]\t\t:left = %s size = %d\n",lefp,VARDATA_COMPRESSED_GET_EXTSIZE(left));
-    // printf("\t\t[TYX LOG]\t\t:right = %s size = %d\n",righp,VARDATA_COMPRESSED_GET_EXTSIZE(right));
 
     while(lefp < lefend && righp < righend){
-        // printf("[ before ] left : %d(%d[%d]) %s  right : %d(%d[%d]) %s\n",lef_count,(lefp-(char *)left),(lefend-(char *)left),cur_lef_p,righ_count,(righp-(char *)right),(righend-(char *)right),cur_righ_p);
         if(lef_count == 0){
             lef_count =  (0x1&((*lefp) >> 7)) == 1 ? (int32)((*lefp) & 0x7f) + THRESHOLD :  (int32)((*lefp) & 0x7f);
             if((0x1&((*lefp) >> 7)) == 1) {
@@ -310,12 +178,9 @@ hocotext_hoco_cmp(struct varlena * left,
             cur_righ_p = cur_righ;
         }
         
-        // printf("[ before ] left : %d(%d[%d]) %s  right : %d(%d[%d]) %s\n",lef_count,(lefp-(char *)left),(lefend-(char *)left),cur_lef_p,righ_count,(righp-(char *)right),(righend-(char *)right),cur_righ_p);
-        // printf("[ after ] left : %d(%d[%d]) %s  right : %d(%d[%d]) %s\n",lef_count,(lefp-left),(lefend-left),cur_lef_p,righ_count,(righp-right),(righend-right),cur_righ_p);
-
 
         while(lef_count >0 && righ_count > 0){
-            // printf("%c   %c\n",(*cur_lef_p),(*cur_righ_p));
+
             if((*cur_lef_p) == (*cur_righ_p)){
                 cur_lef_p ++;
                 cur_righ_p++;
@@ -344,7 +209,6 @@ hocotext_hoco_cmp(struct varlena * left,
             cur_lef_p = cur_lef;
         }
         while(lef_count >0 && righ_count > 0){
-            // printf("%c   %c\n",(*cur_lef_p),(*cur_righ_p));
             if((*cur_lef_p) == (*cur_righ_p)){
                 cur_lef_p ++;
                 cur_righ_p++;
@@ -375,8 +239,6 @@ hocotext_hoco_cmp(struct varlena * left,
             cur_righ_p = cur_righ;
         }
         while(lef_count >0 && righ_count > 0){
-            // printf("%c   %c\n",(*cur_lef_p),(*cur_righ_p));
-
             if((*cur_lef_p) == (*cur_righ_p)){
                 cur_lef_p ++;
                 cur_righ_p++;
@@ -414,19 +276,17 @@ hocotext_mixed_cmp(struct varlena * left,
 
     if(!VARATT_IS_COMPRESSED(left) && VARATT_IS_COMPRESSED(right)){
         exchange = true;
-        lefp = (char *) right + VARHDRSZ_COMPRESSED;
+        lefp = (char *) right + VARHDRSZ_COMPRESSED + 8; // jump over 8 byte index info 
         lefend = (char *) right + VARSIZE_ANY(right);
         righp = VARDATA_ANY(left);
         righend = (char *)left + VARSIZE(left);
     }else{
-        lefp = (char *) left + VARHDRSZ_COMPRESSED;
+        lefp = (char *) left + VARHDRSZ_COMPRESSED + 8; // jump over 8 byte index info 
         lefend = (char *) left + VARSIZE_ANY(left);
         righp = VARDATA_ANY(right);
         righend = (char *)right + VARSIZE(right);
     }
-    // printf("\t\t[TYX LOG]\t\t:in rle mixed cmp\n");
-    // printf("\t\t[TYX LOG]\t\t:left = %s\n",lefp);
-    // printf("\t\t[TYX LOG]\t\t:right = %s\n",righp);
+
 	if (!OidIsValid(collid))
 	{
 		/*
@@ -436,7 +296,7 @@ hocotext_mixed_cmp(struct varlena * left,
 		ereport(ERROR,
 				(errcode(ERRCODE_INDETERMINATE_COLLATION),
 				 errmsg("could not determine which collation to use for %s function",
-						"hocotext_extract()"),
+						"hocotext_cmp()"),
 				 errhint("Use the COLLATE clause to set the collation explicitly.")));
 	}
 
@@ -499,9 +359,6 @@ hocotext_common_cmp(struct varlena * left,
     char * righend = (char *)right + VARSIZE_ANY(right);
 
 
-    // printf("\t\t[TYX LOG]\t\t:in rle common cmp\n");
-    // printf("\t\t[TYX LOG]\t\t:left = %s size = %d\n",lefp,VARSIZE_ANY(left));
-    // printf("\t\t[TYX LOG]\t\t:right = %s size = %d\n",righp,VARSIZE_ANY(right));
 	if (!OidIsValid(collid))
 	{
 		/*
@@ -511,13 +368,12 @@ hocotext_common_cmp(struct varlena * left,
 		ereport(ERROR,
 				(errcode(ERRCODE_INDETERMINATE_COLLATION),
 				 errmsg("could not determine which collation to use for %s function",
-						"hocotext_extract()"),
+						"hocotext_cmp()"),
 				 errhint("Use the COLLATE clause to set the collation explicitly.")));
 	}
 
     while(lefp < lefend && righp < righend){
-        // printf("[ next ] left :  %s  right :  %s\n",(*lefp),(*righp));
-        // printf("[ next ] left : (%d[%d]) %s  right : (%d[%d]) %s\n",(lefp),(lefend),(*lefp),(righp),(righend),(*righp));
+
 
         if((*lefp) == (*righp)){
             lefp ++;
@@ -546,9 +402,9 @@ hocotext_hoco_extract(struct varlena * source,
     int32 cur_offset = 0; //offset in raw text
     int32 count = 0;
     int32 type = 1; // 1: repeated  0: single
-    int32 reach =0;
+    int32 reach = 0;
     int32 rawsize = VARDATA_COMPRESSED_GET_EXTSIZE(source);
-
+    // int32 source_len = 0;
 	if (!OidIsValid(collid))
 	{
 		/*
@@ -564,25 +420,35 @@ hocotext_hoco_extract(struct varlena * source,
 
 
 
-    sp = (char *) source + VARHDRSZ_COMPRESSED;
+    sp = (char *) source + VARHDRSZ_COMPRESSED + 8; 
     // srcend = (char*) source + VARSIZE(source);
-    
-    if(len < 0){
-        pg_printf("Error: Bad extraction start offset\n");
-        exit(0);
+    // source_len = VARSIZE(source) - VARHDRSZ_COMPRESSED -8;
+
+
+
+
+    if(rawsize < offset){
+		ereport(ERROR,
+				(errcode(ERRCODE_PLPGSQL_ERROR),
+				 errmsg("Bad extraction start offset %d, total value size is only %d",
+						offset, rawsize),
+				 errhint("change extraction start offset")));
     }
     if(len < 0){
-        pg_printf("Error: Bad extraction length\n");
-        exit(0);
+		ereport(ERROR,
+				(errcode(ERRCODE_PLPGSQL_ERROR),
+				 errmsg("Bad extraction len %d < 0",
+						len),
+				 errhint("change extraction len")));
     }
     
     dp = VARDATA_ANY(result);
     destend = VARDATA_ANY(result) + len;
 
     /**
-     * location the offset
+     * locate the offset
      */
-    while(cur_offset < offset){
+    while(cur_offset < offset || !reach){
         type = (int32)(((*sp) >> 7) & 1);
         count = type == 1 ? (int32)((*sp) & 0x7f) + THRESHOLD : (int32)((*sp) & 0x7f);
         reach = offset - (count + cur_offset) <= 0 ? 1 : 0;
@@ -625,6 +491,130 @@ hocotext_hoco_extract(struct varlena * source,
     return result;
 }
 
+
+text * 
+hocotext_hoco_extract_with_index_optimization(struct varlena * source,
+                                                int32 offset,
+                                                int32 len,
+                                                Oid collid){
+    text *result = (text *)palloc(len + VARHDRSZ + 10); 
+	const char *sp;
+    Oid relid = 0;
+	// const char *srcend;
+	char *dp;
+	char *destend;
+    int32 cur_offset = 0; //offset in raw text
+    int32 count = 0;
+    int32 type = 1; // 1: repeated  0: single
+    int32 reach = 0;
+    int32 rawsize = VARDATA_COMPRESSED_GET_EXTSIZE(source);
+    int32 index_pointer = 0;
+    index_pair location;
+    // int32 source_len = 0;
+	if (!OidIsValid(collid))
+	{
+		/*
+		 * This typically means that the parser could not resolve a conflict
+		 * of implicit collations, so report it that way.
+		 */
+		ereport(ERROR,
+				(errcode(ERRCODE_INDETERMINATE_COLLATION),
+				 errmsg("could not determine which collation to use for %s function",
+						"hocotext_extract()"),
+				 errhint("Use the COLLATE clause to set the collation explicitly.")));
+	}
+
+
+
+    sp = (char *) source + VARHDRSZ_COMPRESSED; 
+    // srcend = (char*) source + VARSIZE(source);
+    // source_len = VARSIZE(source) - VARHDRSZ_COMPRESSED - 8;
+
+    /*
+     * fetch raw value and get the fisrt 4 byte,
+	 * which is the int32 index_pointer.
+    */
+
+	for(int seg = 0 ; seg < 4 ; seg ++,sp ++)
+		index_pointer |= (int32)((*sp) & 0xFF) << (8*seg);
+    
+    /*
+     * fetch raw value and get the next 4 byte,
+	 * which is the unsigned int32 relid.
+    */
+	for(int seg = 0 ; seg < 4 ; seg ++,sp ++)
+		relid |= (int32)((*sp) & 0xFF) << (8*seg);
+    /**
+     * search pg_compression_index table and 
+     * pre-locate the offset segmentation.
+    */
+    location = searchCompressionIndex(relid,index_pointer,offset);
+
+    if(rawsize < offset){
+		ereport(ERROR,
+				(errcode(ERRCODE_PLPGSQL_ERROR),
+				 errmsg("Bad extraction start offset %d, total value size is only %d",
+						offset, rawsize),
+				 errhint("Bad extraction start offset")));
+    }
+    if(len < 0){
+		ereport(ERROR,
+				(errcode(ERRCODE_PLPGSQL_ERROR),
+				 errmsg("Bad extraction len %d < 0",
+						len),
+				 errhint("Bad extraction len")));
+    }
+    
+    dp = VARDATA_ANY(result);
+    destend = VARDATA_ANY(result) + len;
+
+    /**
+     * locate the offset
+     */
+    cur_offset += location.uncompress_offset;
+    sp += location.compress_offset;
+    while(cur_offset < offset || !reach){
+        type = (int32)(((*sp) >> 7) & 1);
+        count = type == 1 ? (int32)((*sp) & 0x7f) + THRESHOLD : (int32)((*sp) & 0x7f);
+        reach = offset - (count + cur_offset) <= 0 ? 1 : 0;
+        if(type == 1){
+            sp += reach ? 1 : 2; 
+        }else{
+            sp += reach ?  offset - cur_offset + 1 : count + 1; 
+        }
+        count -= reach ? offset - cur_offset : 0;
+        cur_offset += reach ? offset - cur_offset : count ; 
+    }
+    while(cur_offset - offset < len && cur_offset < rawsize){
+        if(sp == source->vl_dat){
+            type = (int32)(((*sp) >> 7)&0x1);
+            count = type == 1 ? (int32)((*sp) & 0x7f) + THRESHOLD : (int32)((*sp) & 0x7f);
+        }
+        if(count + cur_offset - offset > len) count = len + offset - cur_offset;
+        
+        if(type == 1){
+            //repeat
+            repeat_buf_copy(dp,(*sp),count);
+            sp ++ ;
+        }else{
+            //single
+            memcpy(dp,sp,count);
+            dp += count;
+            sp += count;
+        }
+        cur_offset += count;
+        type = (int32)(((*sp) >> 7)&0x1);
+        count = type == 1 ? (int32)((*sp) & 0x7f) + THRESHOLD : (int32)((*sp) & 0x7f);
+        sp++;
+    }
+    *dp = '\0';
+    if(!(dp==destend) || cur_offset == rawsize){
+        pg_printf("Error: wrong extraction result\n");
+        return NULL;
+    }
+    SET_VARSIZE(result,len+VARHDRSZ);
+    return result;
+}
 
 text * 
 hocotext_common_extract(struct varlena * source,
@@ -683,7 +673,6 @@ hocotext_hoco_delete(struct varlena * source,
  * *************************************
 */
 
-
 /**
  * *************************************
  * *       OPERATING FUNCTIONS         *
@@ -701,8 +690,8 @@ hocotext_eq(PG_FUNCTION_ARGS){
      * case 2: only one arg is compressed
      * case 3: both left and right are uncompressed
     */
-    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
-    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    struct varlena *left_datum = (text *) pg_detoast_datum_packed_without_decompression(left);
+    struct varlena *right_datum = (text *) pg_detoast_datum_packed_without_decompression(right);
     bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
     bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
@@ -727,7 +716,6 @@ hocotext_eq(PG_FUNCTION_ARGS){
         */
 
         result = (hocotext_common_cmp(left_datum,right_datum,PG_GET_COLLATION()) == 0);
-
     }
 	// pfree(left_datum);
 	// pfree(right_datum);
@@ -748,8 +736,8 @@ hocotext_nq(PG_FUNCTION_ARGS){
      * case 2: only one arg is compressed
      * case 3: both left and right are uncompressed
     */
-    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
-    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    struct varlena *left_datum = (text *) pg_detoast_datum_packed_without_decompression(left);
+    struct varlena *right_datum = (text *) pg_detoast_datum_packed_without_decompression(right);
     bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
     bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
@@ -795,8 +783,8 @@ hocotext_lt(PG_FUNCTION_ARGS){
      * case 2: only one arg is compressed
      * case 3: both left and right are uncompressed
     */
-    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
-    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    struct varlena *left_datum = (text *) pg_detoast_datum_packed_without_decompression(left);
+    struct varlena *right_datum = (text *) pg_detoast_datum_packed_without_decompression(right);
     bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
     bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
@@ -842,8 +830,8 @@ hocotext_le(PG_FUNCTION_ARGS){
      * case 2: only one arg is compressed
      * case 3: both left and right are uncompressed
     */
-    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
-    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    struct varlena *left_datum = (text *) pg_detoast_datum_packed_without_decompression(left);
+    struct varlena *right_datum = (text *) pg_detoast_datum_packed_without_decompression(right);
     bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
     bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
@@ -889,8 +877,8 @@ hocotext_gt(PG_FUNCTION_ARGS){
      * case 2: only one arg is compressed
      * case 3: both left and right are uncompressed
     */
-    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
-    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    struct varlena *left_datum = (text *) pg_detoast_datum_packed_without_decompression(left);
+    struct varlena *right_datum = (text *) pg_detoast_datum_packed_without_decompression(right);
     bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
     bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
@@ -937,8 +925,8 @@ hocotext_ge(PG_FUNCTION_ARGS){
      * case 3: both left and right are uncompressed
     */
 
-    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
-    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    struct varlena *left_datum = (text *) pg_detoast_datum_packed_without_decompression(left);
+    struct varlena *right_datum = (text *) pg_detoast_datum_packed_without_decompression(right);
     bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
     bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
@@ -979,13 +967,36 @@ hocotext_extract(PG_FUNCTION_ARGS){
     int32 offset = PG_GETARG_INT32(1);
     int32 len = PG_GETARG_INT32(2);
     text *result = NULL;
-    struct varlena *source_str = (text *) hocotext_datum_packed(source);
+    struct varlena *source_str = (text *) pg_detoast_datum_packed_without_decompression(source);
     /**
      * TO DO
      * extract a substring of length len from the string source at position offset.
     */
     if(VARATT_IS_COMPRESSED(source_str)){
         result = hocotext_hoco_extract(source_str,offset,len,PG_GET_COLLATION());
+    }else{
+        result = hocotext_common_extract(source_str,offset,len,PG_GET_COLLATION());
+    }
+
+
+   PG_FREE_IF_COPY(source,0);
+
+   PG_RETURN_TEXT_P(result);
+}
+
+Datum
+hocotext_extract_optimized(PG_FUNCTION_ARGS){
+    struct varlena *source = PG_GETARG_RAW_VARLENA_P(0);
+    int32 offset = PG_GETARG_INT32(1);
+    int32 len = PG_GETARG_INT32(2);
+    text *result = NULL;
+    struct varlena *source_str = (text *) pg_detoast_datum_packed_without_decompression(source);
+    /**
+     * TO DO
+     * extract a substring of length len from the string source at position offset.
+    */
+    if(VARATT_IS_COMPRESSED(source_str)){
+        result = hocotext_hoco_extract_with_index_optimization(source_str,offset,len,PG_GET_COLLATION());
     }else{
         result = hocotext_common_extract(source_str,offset,len,PG_GET_COLLATION());
     }
@@ -1021,7 +1032,7 @@ hocotext_insert(PG_FUNCTION_ARGS){
     int32 offset = PG_GETARG_INT32(1);
     text *str = PG_GETARG_TEXT_P(2);
     text *result = NULL;
-    struct varlena *source_str = hocotext_fetch_toasted_attr(source);
+    struct varlena *source_str = (text *) pg_detoast_datum_packed_without_decompression(source);
 
     /**
      * TO DO
@@ -1046,7 +1057,7 @@ hocotext_delete(PG_FUNCTION_ARGS){
     int32 offset = PG_GETARG_INT32(1);
     int32 len = PG_GETARG_INT32(2);
     text *result = NULL;
-    struct varlena *source_str = hocotext_fetch_toasted_attr(source);
+    struct varlena *source_str = (text *) pg_detoast_datum_packed_without_decompression(source);
 
     /**
      * TO DO
@@ -1083,8 +1094,8 @@ hocotext_smaller(PG_FUNCTION_ARGS){
      * case 2: only one arg is compressed
      * case 3: both left and right are uncompressed
     */
-    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
-    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    struct varlena *left_datum = (text *) pg_detoast_datum_packed_without_decompression(left);
+    struct varlena *right_datum = (text *) pg_detoast_datum_packed_without_decompression(right);
     bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
     bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
@@ -1131,8 +1142,8 @@ hocotext_larger(PG_FUNCTION_ARGS){
      * case 2: only one arg is compressed
      * case 3: both left and right are uncompressed
     */
-    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
-    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    struct varlena *left_datum = (text *) pg_detoast_datum_packed_without_decompression(left);
+    struct varlena *right_datum = (text *) pg_detoast_datum_packed_without_decompression(right);
     bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
     bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
@@ -1188,8 +1199,8 @@ hocotext_cmp(PG_FUNCTION_ARGS){
      * case 2: only one arg is compressed
      * case 3: both left and right are uncompressed
     */
-    struct varlena *left_datum = (text *) hocotext_datum_packed(left);
-    struct varlena *right_datum = (text *) hocotext_datum_packed(right);
+    struct varlena *left_datum = (text *) pg_detoast_datum_packed_without_decompression(left);
+    struct varlena *right_datum = (text *) pg_detoast_datum_packed_without_decompression(right);
     bool is_comp_lef = VARATT_IS_COMPRESSED(left_datum);
     bool is_comp_righ = VARATT_IS_COMPRESSED(right_datum);
    	if (is_comp_lef && is_comp_righ){
@@ -1231,7 +1242,7 @@ hocotext_hash(PG_FUNCTION_ARGS){
 
     struct varlena *str = PG_GETARG_RAW_VARLENA_P(0);
 
-    struct varlena *str_datum = hocotext_fetch_toasted_attr(str);
+    struct varlena *str_datum = (text *) pg_detoast_datum_packed_without_decompression(str);
 
 
     /**

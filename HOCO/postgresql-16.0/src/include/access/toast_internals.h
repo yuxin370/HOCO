@@ -50,7 +50,11 @@ typedef struct toast_compress_header
 			(len) | ((uint32) (cm_method) << VARLENA_EXTSIZE_BITS); \
 	} while (0)
 
-extern Datum toast_compress_datum(Datum value, char cmethod);
+/**
+ * 2023.12.4
+ * Yuxin Tang
+*/
+extern Datum toast_compress_datum(Datum value, char cmethod, Relation rel);
 extern Oid	toast_get_valid_index(Oid toastoid, LOCKMODE lock);
 
 extern void toast_delete_datum(Relation rel, Datum value, bool is_speculative);

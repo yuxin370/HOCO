@@ -52,6 +52,18 @@ extern struct varlena *detoast_external_attr(struct varlena *attr);
  */
 extern struct varlena *detoast_attr(struct varlena *attr);
 
+
+/* ----------
+ * detoast_attr_without_decompression() -
+ *
+ * 		Yuxin Tang
+ * 		2024.1.3
+ *		partially detoasts one attribute, fetching without decompressing 
+ *      if compressed.
+ * ----------
+ */
+extern struct varlena * detoast_attr_without_decompression(struct varlena *attr);
+
 /* ----------
  * detoast_attr_slice() -
  *

@@ -236,6 +236,12 @@ extern struct varlena *pg_detoast_datum_copy(struct varlena *datum);
 extern struct varlena *pg_detoast_datum_slice(struct varlena *datum,
 											  int32 first, int32 count);
 extern struct varlena *pg_detoast_datum_packed(struct varlena *datum);
+extern struct varlena *pg_detoast_datum_packed_without_decompression(struct varlena *datum);
+/**
+ * Yuxin Tang 
+ * 2024.1.3
+*/
+
 
 #define PG_DETOAST_DATUM(datum) \
 	pg_detoast_datum((struct varlena *) DatumGetPointer(datum))

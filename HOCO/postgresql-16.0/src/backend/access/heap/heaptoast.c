@@ -69,8 +69,20 @@ heap_toast_delete(Relation rel, HeapTuple oldtup, bool is_speculative)
 	Assert(tupleDesc->natts <= MaxHeapAttributeNumber);
 	heap_deform_tuple(oldtup, tupleDesc, toast_values, toast_isnull);
 
+	/**
+	 * 2024.1.2
+	 * Yuxin Tang
+	 * 
+	 * while deleting a toasted tuple, if there are corresponding entries in 
+	 * the pg_compression_index table, we have to delete them too.
+	 * 
+	 * Do the real work
+	*/
+	toast_delete_compression_index(rel, toast_values, toast_isnull, is_speculative);
+
 	/* Do the real work. */
-	toast_delete_external(rel, toast_values, toast_isnull, is_speculative);
+	if (HeapTupleHasExternal(oldtup))
+		toast_delete_external(rel, toast_values, toast_isnull, is_speculative);
 }
 
 

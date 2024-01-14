@@ -17,6 +17,12 @@
 #include "storage/lockdefs.h"
 #include "utils/relcache.h"
 
+/**
+ * 2024.1.2
+ * Yuxin Tang 
+*/
+#include "catalog/pg_max_comp_index_pointer.h"
+
 /*
  * Find the maximum size of a tuple if there are to be N tuples per page.
  */

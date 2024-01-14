@@ -92,6 +92,7 @@ GetTableAmRoutine(Oid amhandler)
 	Assert(routine->scan_analyze_next_tuple != NULL);
 	Assert(routine->index_build_range_scan != NULL);
 	Assert(routine->index_validate_scan != NULL);
+	Assert(routine->tuple_count != NULL);
 
 	Assert(routine->relation_size != NULL);
 	Assert(routine->relation_needs_toast_table != NULL);

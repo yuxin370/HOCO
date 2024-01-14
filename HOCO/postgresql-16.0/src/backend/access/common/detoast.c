@@ -198,6 +198,95 @@ detoast_attr(struct varlena *attr)
 }
 
 
+
+/***
+ * toasted_attr_without_decompression -
+ *	
+ * 2024.1.3
+ * Yuxin Tang 
+ * Public entry point to get back a toasted value from 
+ * external storage. The result is always non-extended 
+ * varlena form without decompression (if compressed) .
+ *
+ * Note some callers assume that if the input is an EXTERNAL or COMPRESSED
+ * datum, the result will be a pfree'able chunk.
+*/
+
+struct varlena *
+detoast_attr_without_decompression(struct varlena *attr)
+{
+	if (VARATT_IS_EXTERNAL_ONDISK(attr))
+	{
+		/*
+		 * This is an externally stored datum --- fetch it back from there
+		 */
+		attr = toast_fetch_datum(attr);
+		/* If it's compressed, do nothing */
+
+	}
+	else if (VARATT_IS_EXTERNAL_INDIRECT(attr))
+	{
+		/*
+		 * This is an indirect pointer --- dereference it
+		 */
+		struct varatt_indirect redirect;
+
+		VARATT_EXTERNAL_GET_POINTER(redirect, attr);
+		attr = (struct varlena *) redirect.pointer;
+
+		/* nested indirect Datums aren't allowed */
+		Assert(!VARATT_IS_EXTERNAL_INDIRECT(attr));
+
+		/* recurse in case value is still extended in some other way */
+		attr = detoast_attr_without_decompression(attr);
+
+		/* if it isn't, we'd better copy it */
+		if (attr == (struct varlena *) redirect.pointer)
+		{
+			struct varlena *result;
+
+			result = (struct varlena *) palloc(VARSIZE_ANY(attr));
+			memcpy(result, attr, VARSIZE_ANY(attr));
+			attr = result;
+		}
+	}
+	else if (VARATT_IS_EXTERNAL_EXPANDED(attr))
+	{
+		/*
+		 * This is an expanded-object pointer --- get flat format
+		 */
+		attr = detoast_external_attr(attr);
+		/* flatteners are not allowed to produce compressed/short output */
+		Assert(!VARATT_IS_EXTENDED(attr));
+	}
+	else if (VARATT_IS_COMPRESSED(attr))
+	{
+		/*
+		 * This is a compressed value inside of the main tuple
+		 */
+		// attr = toast_decompress_datum(attr);
+        // do nothing
+	}
+	else if (VARATT_IS_SHORT(attr))
+	{
+		/*
+		 * This is a short-header varlena --- convert to 4-byte header format
+		 */
+		Size		data_size = VARSIZE_SHORT(attr) - VARHDRSZ_SHORT;
+		Size		new_size = data_size + VARHDRSZ;
+		struct varlena *new_attr;
+
+		new_attr = (struct varlena *) palloc(new_size);
+		SET_VARSIZE(new_attr, new_size);
+		memcpy(VARDATA(new_attr), VARDATA_SHORT(attr), data_size);
+		attr = new_attr;
+	}
+
+	return attr;
+}
+
+
+
 /* ----------
  * detoast_attr_slice -
  *

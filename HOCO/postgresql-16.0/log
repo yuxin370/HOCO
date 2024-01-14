@@ -1,0 +1,110 @@
+make -C ./src/backend generated-headers
+make[1]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend'
+make -C catalog distprep generated-header-symlinks
+make[2]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/catalog'
+make[2]: Nothing to be done for 'distprep'.
+make[2]: Nothing to be done for 'generated-header-symlinks'.
+make[2]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/catalog'
+make -C nodes distprep generated-header-symlinks
+make[2]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/nodes'
+make[2]: Nothing to be done for 'distprep'.
+make[2]: Nothing to be done for 'generated-header-symlinks'.
+make[2]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/nodes'
+make -C utils distprep generated-header-symlinks
+make[2]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/utils'
+make[2]: Nothing to be done for 'distprep'.
+make[2]: Nothing to be done for 'generated-header-symlinks'.
+make[2]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/utils'
+make[1]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend'
+make -C src all
+make[1]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src'
+make -C common all
+make[2]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/common'
+make[2]: Nothing to be done for 'all'.
+make[2]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/common'
+make -C port all
+make[2]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/port'
+make[2]: Nothing to be done for 'all'.
+make[2]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/port'
+make -C timezone all
+make[2]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/timezone'
+make -C ../../src/port all
+make[3]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/port'
+make[3]: Nothing to be done for 'all'.
+make[3]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/port'
+make -C ../../src/common all
+make[3]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/common'
+make[3]: Nothing to be done for 'all'.
+make[3]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/common'
+make[2]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/timezone'
+make -C backend all
+make[2]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend'
+make -C ../../src/port all
+make[3]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/port'
+make[3]: Nothing to be done for 'all'.
+make[3]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/port'
+make -C ../../src/common all
+make[3]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/common'
+make[3]: Nothing to be done for 'all'.
+make[3]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/common'
+make -C catalog distprep generated-header-symlinks
+make[3]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/catalog'
+make[3]: Nothing to be done for 'distprep'.
+make[3]: Nothing to be done for 'generated-header-symlinks'.
+make[3]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/catalog'
+make -C utils distprep generated-header-symlinks
+make[3]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/utils'
+make[3]: Nothing to be done for 'distprep'.
+make[3]: Nothing to be done for 'generated-header-symlinks'.
+make[3]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/utils'
+make -C access all
+make[3]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access'
+make -C brin all
+make[4]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/brin'
+make[4]: Nothing to be done for 'all'.
+make[4]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/brin'
+make -C common all
+make[4]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/common'
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -O2 -I../../../../src/include -I/usr/include/unicode -D_GNU_SOURCE   -c -o detoast.o detoast.c
+touch objfiles.txt
+make[4]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/common'
+make -C gin all
+make[4]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/gin'
+make[4]: Nothing to be done for 'all'.
+make[4]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/gin'
+make -C gist all
+make[4]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/gist'
+make[4]: Nothing to be done for 'all'.
+make[4]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/gist'
+make -C hash all
+make[4]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/hash'
+make[4]: Nothing to be done for 'all'.
+make[4]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/hash'
+make -C heap all
+make[4]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/heap'
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -O2 -I../../../../src/include -I/usr/include/unicode -D_GNU_SOURCE   -c -o heaptoast.o heaptoast.c
+touch objfiles.txt
+make[4]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/heap'
+make -C index all
+make[4]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/index'
+make[4]: Nothing to be done for 'all'.
+make[4]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/index'
+make -C nbtree all
+make[4]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/nbtree'
+make[4]: Nothing to be done for 'all'.
+make[4]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/nbtree'
+make -C rmgrdesc all
+make[4]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/rmgrdesc'
+make[4]: Nothing to be done for 'all'.
+make[4]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/rmgrdesc'
+make -C spgist all
+make[4]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/spgist'
+make[4]: Nothing to be done for 'all'.
+make[4]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/spgist'
+make -C table all
+make[4]: Entering directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/table'
+gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -O2 -I../../../../src/include -I/usr/include/unicode -D_GNU_SOURCE   -c -o toast_helper.o toast_helper.c
+make[4]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access/table'
+make[3]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend/access'
+make[2]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src/backend'
+make[1]: Leaving directory '/home/fanfan/HOCO/postgresql-16.0/src'

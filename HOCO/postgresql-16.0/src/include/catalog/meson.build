@@ -65,6 +65,8 @@ catalog_headers = [
   'pg_publication_rel.h',
   'pg_subscription.h',
   'pg_subscription_rel.h',
+  'pg_compression_index.h',
+  'pg_max_comp_index_pointer.h'
 ]
 
 bki_data = [

@@ -237,7 +237,7 @@ brin_form_tuple(BrinDesc *brdesc, BlockNumber blkno, BrinMemTuple *tuple,
 				else
 					compression = InvalidCompressionMethod;
 
-				cvalue = toast_compress_datum(value, compression);
+				cvalue = toast_compress_datum(value, compression,NULL);
 
 				if (DatumGetPointer(cvalue) != NULL)
 				{

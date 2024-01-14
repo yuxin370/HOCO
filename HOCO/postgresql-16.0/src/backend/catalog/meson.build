@@ -34,6 +34,8 @@ backend_sources += files(
   'pg_type.c',
   'storage.c',
   'toasting.c',
+  'pg_compression_index.c',
+  'pg_max_comp_index_pointer'
 )
 
 

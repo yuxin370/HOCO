@@ -46,7 +46,12 @@ OBJS = \
 	pg_subscription.o \
 	pg_type.o \
 	storage.o \
-	toasting.o
+	toasting.o \
+	pg_compression_index.o\
+	pg_max_comp_index_pointer.o
+	
+# 2024.1.2
+# Yuxin Tang
 
 include $(top_srcdir)/src/backend/common.mk
 
@@ -72,7 +77,11 @@ CATALOG_HEADERS := \
 	pg_collation.h pg_parameter_acl.h pg_partitioned_table.h \
 	pg_range.h pg_transform.h \
 	pg_sequence.h pg_publication.h pg_publication_namespace.h \
-	pg_publication_rel.h pg_subscription.h pg_subscription_rel.h
+	pg_publication_rel.h pg_subscription.h pg_subscription_rel.h \
+	pg_compression_index.h pg_max_comp_index_pointer.h
+
+# 2024.1.2
+# Yuxin Tang
 
 GENERATED_HEADERS := $(CATALOG_HEADERS:%.h=%_d.h) schemapg.h system_fk_info.h
 

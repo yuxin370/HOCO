@@ -2892,9 +2892,14 @@ l1:
 		/* toast table entries should never be recursively toasted */
 		Assert(!HeapTupleHasExternal(&tp));
 	}
-	else if (HeapTupleHasExternal(&tp))
+	// else if (HeapTupleHasExternal(&tp)) 
+	/**
+	 * 2024.1.3
+	 * Yuxin Tang
+	*/
+	else
 		heap_toast_delete(relation, &tp, false);
-
+	
 	/*
 	 * Mark tuple for invalidation from system caches at next command
 	 * boundary. We have to do this before releasing the buffer because we

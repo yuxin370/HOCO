@@ -75,6 +75,13 @@
 #include "catalog/pg_ts_template.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_user_mapping.h"
+/**
+ * Yuxin Tang 
+ * 2023.12.1
+*/
+#include "catalog/pg_compression_index.h"
+#include "catalog/pg_max_comp_index_pointer.h"
+
 #include "lib/qunique.h"
 #include "utils/catcache.h"
 #include "utils/lsyscache.h"
@@ -676,8 +683,28 @@ static const struct cachedesc cacheinfo[] = {
 		KEY(Anum_pg_user_mapping_umuser,
 			Anum_pg_user_mapping_umserver),
 		2
+	},
+	[COMPRESSIONINDEXSOURCELOCATION] = {
+		CompressionIndexRelationId,
+		CompressionIndexSourceLocationIndexId,
+		KEY(Anum_pg_compression_index_relid,
+			Anum_pg_compression_index_rowid,
+			Anum_pg_compression_index_compress_off),
+		64
+	},
+	[MAXCOMPINDEXPOINTERSOURCELOCATION] = {
+		MaxCompIndexPointerRelationId,
+		MaxCompIndexPointerSourceLocationIndexId,
+		KEY(Anum_pg_max_comp_index_pointer_relid),
+		2
 	}
+
 };
+
+/**
+ * Yuxin Tang 
+ * 2023.12.1
+*/
 
 StaticAssertDecl(lengthof(cacheinfo) == SysCacheSize,
 				 "SysCacheSize does not match syscache.c's array");
@@ -1088,7 +1115,7 @@ SysCacheGetAttr(int cacheId, HeapTuple tup,
 	 */
 	if (cacheId < 0 || cacheId >= SysCacheSize ||
 		!PointerIsValid(SysCache[cacheId]))
-		elog(ERROR, "invalid cache ID: %d", cacheId);
+		elog(ERROR, "tyx1 invalid cache ID: %d", cacheId);
 	if (!PointerIsValid(SysCache[cacheId]->cc_tupdesc))
 	{
 		InitCatCachePhase2(SysCache[cacheId], false);
@@ -1145,7 +1172,7 @@ GetSysCacheHashValue(int cacheId,
 {
 	if (cacheId < 0 || cacheId >= SysCacheSize ||
 		!PointerIsValid(SysCache[cacheId]))
-		elog(ERROR, "invalid cache ID: %d", cacheId);
+		elog(ERROR, "tyx2 invalid cache ID: %d", cacheId);
 
 	return GetCatCacheHashValue(SysCache[cacheId], key1, key2, key3, key4);
 }
@@ -1159,7 +1186,7 @@ SearchSysCacheList(int cacheId, int nkeys,
 {
 	if (cacheId < 0 || cacheId >= SysCacheSize ||
 		!PointerIsValid(SysCache[cacheId]))
-		elog(ERROR, "invalid cache ID: %d", cacheId);
+		elog(ERROR, "tyx3 invalid cache ID: %d", cacheId);
 
 	return SearchCatCacheList(SysCache[cacheId], nkeys,
 							  key1, key2, key3);
@@ -1177,7 +1204,7 @@ void
 SysCacheInvalidate(int cacheId, uint32 hashValue)
 {
 	if (cacheId < 0 || cacheId >= SysCacheSize)
-		elog(ERROR, "invalid cache ID: %d", cacheId);
+		elog(ERROR, "tyx4 invalid cache ID: %d", cacheId);
 
 	/* if this cache isn't initialized yet, no need to do anything */
 	if (!PointerIsValid(SysCache[cacheId]))

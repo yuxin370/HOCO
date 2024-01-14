@@ -27,12 +27,19 @@
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
 
+/**
+ * 2024.1.2
+ * Yuxin Tang
+*/
+#include "catalog/pg_max_comp_index_pointer.h"
+
+
 /***
  * 2023.9.28
  * Yuxin Tang
 */
 #include "common/rle_compress.h"
-
+#include "access/tableam.h"
 
 static bool toastrel_valueid_exists(Relation toastrel, Oid valueid);
 static bool toastid_valueid_exists(Oid toastrelid, Oid valueid);
@@ -50,8 +57,13 @@ static bool toastid_valueid_exists(Oid toastrelid, Oid valueid);
  *	copying them.  But we can't handle external or compressed datums.
  * ----------
  */
+
+/**
+ * Yuxin Tang
+ * 2023.12.4
+*/
 Datum
-toast_compress_datum(Datum value, char cmethod)
+toast_compress_datum(Datum value, char cmethod, Relation rel)
 {
 	struct varlena *tmp = NULL;
 	int32		valsize;
@@ -84,9 +96,13 @@ toast_compress_datum(Datum value, char cmethod)
 		 * Yuxin Tang
 		*/
 		case TOAST_RLE_COMPRESSION:
-			tmp = rle_compress_datum((const struct varlena *) value);
+		{
+			Oid oid = RelationGetRelid(rel);
+			int32 tuples = FindMaxCompIndexPointer(oid) + 1;
+			tmp = rle_compress_datum((const struct varlena *) value,oid,tuples);
 			cmid = TOAST_RLE_COMPRESSION_ID;
 			break;
+		}
 		default:
 			elog(ERROR, "invalid compression method %c", cmethod);
 	}

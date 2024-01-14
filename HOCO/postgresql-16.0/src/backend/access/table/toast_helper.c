@@ -20,6 +20,12 @@
 #include "access/toast_internals.h"
 #include "catalog/pg_type_d.h"
 #include "varatt.h"
+#include "catalog/pg_compression_index.h"
+#include "catalog/pg_max_comp_index_pointer.h"
+/**
+ * Yuxin Tang
+ * 2024.1.3
+*/
 
 
 /*
@@ -220,6 +226,9 @@ toast_tuple_find_biggest_attribute(ToastTupleContext *ttc,
 }
 
 /*
+ * Yuxin Tang
+ * 2023.12.4
+ * 
  * Try compression for an attribute.
  *
  * If we find that the attribute is not compressible, mark it so.
@@ -231,7 +240,7 @@ toast_tuple_try_compression(ToastTupleContext *ttc, int attribute)
 	Datum		new_value;
 	ToastAttrInfo *attr = &ttc->ttc_attr[attribute];
 
-	new_value = toast_compress_datum(*value, attr->tai_compression);
+	new_value = toast_compress_datum(*value, attr->tai_compression,ttc->ttc_rel);
 
 	if (DatumGetPointer(new_value) != NULL)
 	{
@@ -333,6 +342,81 @@ toast_delete_external(Relation rel, Datum *values, bool *isnull,
 				continue;
 			else if (VARATT_IS_EXTERNAL_ONDISK(value))
 				toast_delete_datum(rel, value, is_speculative);
+		}
+	}
+}
+
+
+/**
+ * 2024.1.2
+ * Yuxin Tang Tochange
+ * 	 
+ * 1. read the first 4 bytes of the old tuple, get the index pointer
+ * 2. delete the corresponding entries in the  pg_compression_index table by relid & index pointer.
+ */
+void
+toast_delete_compression_index(Relation rel, Datum *values, bool *isnull,
+					  bool is_speculative)
+{
+	
+	
+	
+	TupleDesc	tupleDesc = rel->rd_att;
+	int			numAttrs = tupleDesc->natts;
+	int			i;
+	struct varlena * raw_attr;
+	char *raw_value;
+	int32 index_pointer;
+	ToastCompressionId cmid;
+	int32 max_pointer;
+
+	for (i = 0; i < numAttrs; i++)
+	{
+		if (TupleDescAttr(tupleDesc, i)->attlen == -1)
+		{
+			Datum		value = values[i];
+
+			if (isnull[i])
+				continue;
+			else if (VARATT_IS_COMPRESSED(value) || VARATT_IS_EXTERNAL(value)){
+				
+				// elog(WARNING, "VARATT_IS_COMPRESSED(value) = %d  && VARATT_IS_EXTERNAL(value) = %d", VARATT_IS_COMPRESSED(value), VARATT_IS_EXTERNAL(value));
+
+				struct varlena *attr = (struct varlena *) DatumGetPointer(value);
+				
+				// if (!VARATT_IS_COMPRESSED(attr))
+				// 	elog(WARNING, "rel %u 's attr value is not compressed!", (rel->rd_id));
+
+				/**
+				 * check compression method,
+				 * only RLE supported.
+				*/
+
+				// cmid = TOAST_COMPRESS_METHOD(attr);
+				// if(cmid != TOAST_RLE_COMPRESSION_ID)
+				// 	elog(WARNING, "rel %u 's compression method is %d!", cmid);
+				
+				
+				/**
+				 * fetch raw value and get the fisrt 4 byte,
+				 * which is the int32 index_pointer.
+				*/
+				raw_attr =  detoast_attr_without_decompression(attr);
+				raw_value = (char *) raw_attr + VARHDRSZ_COMPRESSED;
+				
+				index_pointer = 0;
+				for(int seg = 0 ; seg < 4 ; seg ++,raw_value ++)
+					index_pointer |= (int32)((*raw_value) & 0xFF) << (8*seg);
+				
+				/**
+				 * delete the corresponding entries in the  pg_compression_index table by relid & index pointer.
+				*/
+			    max_pointer = FindMaxCompIndexPointer(rel->rd_id);
+				if(max_pointer > 0 && max_pointer >= index_pointer){
+					if(!DeleteCompressionIndex(rel->rd_id,index_pointer))
+						elog(WARNING, "entries for rel %u with index_pointer %d not deleted", (rel->rd_id),index_pointer);
+				};
+			}
 		}
 	}
 }

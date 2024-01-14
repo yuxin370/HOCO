@@ -694,6 +694,20 @@ typedef struct TableAmRoutine
 										   IndexBuildCallback callback,
 										   void *callback_state,
 										   TableScanDesc scan);
+	/**
+	 * Yuxin Tang 
+	 * 2023.12.7
+	 * see table_tuple_count_scan for reference about parameters
+	*/
+	/*
+	double 		(*tuple_count) (Relation heapRelation,
+				  		   		bool allow_sync,
+				  		   		bool anyvisible,
+				  		   		bool progress,
+						   		BlockNumber start_blockno,
+						   		BlockNumber numblocks,
+				  		   		TableScanDesc scan);
+	*/
 
 	/* see table_index_validate_scan for reference about parameters */
 	void		(*index_validate_scan) (Relation table_rel,
@@ -1791,6 +1805,33 @@ table_index_build_scan(Relation table_rel,
 														 scan);
 }
 
+
+
+/**
+ * Yuxin Tang
+ * 2023.12.6
+ * 
+ * table_tuple_count_scan 
+ * 
+ * count the tuple in table table_rel
+ * 
+*/
+
+// static inline double
+// table_tuple_count_scan(Relation table_rel,
+// 					   bool allow_sync,
+// 					   bool progress,
+// 					   TableScanDesc scan)
+// {
+// 	return table_rel->rd_tableam->tuple_count(table_rel,
+// 											 allow_sync,
+// 											 false,
+// 											 progress,
+// 											 0,
+// 											 InvalidBlockNumber,
+// 											 scan);
+// }
+
 /*
  * As table_index_build_scan(), except that instead of scanning the complete
  * table, only the given number of blocks are scanned.  Scan to end-of-rel can
@@ -2088,6 +2129,15 @@ extern void table_block_relation_estimate_size(Relation rel,
 											   double *allvisfrac,
 											   Size overhead_bytes_per_tuple,
 											   Size usable_bytes_per_page);
+
+extern double
+heapam_range_scan(Relation heapRelation,
+				  bool allow_sync,
+				  bool anyvisible,
+				  bool progress,
+				  BlockNumber start_blockno,
+				  BlockNumber numblocks,
+				  TableScanDesc scan);
 
 /* ----------------------------------------------------------------------------
  * Functions in tableamapi.c

@@ -76,7 +76,7 @@ extern struct varlena *pglz_decompress_datum_slice(const struct varlena *value,
  * 
  * rle compression/decompression routines
 */
-extern struct varlena *rle_compress_datum(const struct varlena *value);
+extern struct varlena *rle_compress_datum(const struct varlena *value,Oid oid,int32 tuples);
 extern struct varlena *rle_decompress_datum(const struct varlena *value);
 extern struct varlena *rle_decompress_datum_slice(const struct varlena *value,
 												   int32 slicelength);

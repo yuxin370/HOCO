@@ -1741,6 +1741,432 @@ heapam_index_build_range_scan(Relation heapRelation,
 	return reltuples;
 }
 
+
+/**
+ * Yuxin Tang
+ * 2023.12.6
+*/
+
+double
+heapam_range_scan(Relation heapRelation,
+				  bool allow_sync,
+				  bool anyvisible,
+				  bool progress,
+				  BlockNumber start_blockno,
+				  BlockNumber numblocks,
+				  TableScanDesc scan)
+{
+	HeapScanDesc hscan;
+	bool		is_system_catalog;
+	HeapTuple	heapTuple;
+	Datum		values[INDEX_MAX_KEYS];
+	bool		isnull[INDEX_MAX_KEYS];
+	double		reltuples;
+	Snapshot	snapshot;
+	bool		need_unregister_snapshot = false;
+	TransactionId OldestXmin;
+	BlockNumber previous_blkno = InvalidBlockNumber;
+	BlockNumber root_blkno = InvalidBlockNumber;
+	OffsetNumber root_offsets[MaxHeapTuplesPerPage];
+
+	/*
+	 * sanity checks
+	 */
+	Assert(OidIsValid(indexRelation->rd_rel->relam));
+
+	/* Remember if it's a system catalog */
+	is_system_catalog = IsSystemRelation(heapRelation);
+
+	
+	/*
+	 * Prepare for scan of the base relation.  In a normal index build, we use
+	 * SnapshotAny because we must retrieve all tuples and do our own time
+	 * qual checks (because we have to index RECENTLY_DEAD tuples). In a
+	 * concurrent build, or during bootstrap, we take a regular MVCC snapshot
+	 * and index whatever's live according to that.
+	 */
+	OldestXmin = InvalidTransactionId;
+
+	/* okay to ignore lazy VACUUMs here */
+	if (!IsBootstrapProcessingMode())
+		OldestXmin = GetOldestNonRemovableTransactionId(heapRelation);
+
+	if (!scan)
+	{
+		/*
+		 * Serial index build.
+		 *
+		 * Must begin our own heap scan in this case.  We may also need to
+		 * register a snapshot whose lifetime is under our direct control.
+		 */
+		if (!TransactionIdIsValid(OldestXmin))
+		{
+			snapshot = RegisterSnapshot(GetTransactionSnapshot());
+			need_unregister_snapshot = true;
+		}
+		else
+			snapshot = SnapshotAny;
+
+		scan = table_beginscan_strat(heapRelation,	/* relation */
+									 snapshot,	/* snapshot */
+									 0, /* number of keys */
+									 NULL,	/* scan key */
+									 true,	/* buffer access strategy OK */
+									 allow_sync);	/* syncscan OK? */
+	}
+	else
+	{
+		/*
+		 * Parallel index build.
+		 *
+		 * Parallel case never registers/unregisters own snapshot.  Snapshot
+		 * is taken from parallel heap scan, and is SnapshotAny or an MVCC
+		 * snapshot, based on same criteria as serial case.
+		 */
+		Assert(!IsBootstrapProcessingMode());
+		Assert(allow_sync);
+		snapshot = scan->rs_snapshot;
+	}
+
+	hscan = (HeapScanDesc) scan;
+
+	/*
+	 * Must have called GetOldestNonRemovableTransactionId() if using
+	 * SnapshotAny.  Shouldn't have for an MVCC snapshot. (It's especially
+	 * worth checking this for parallel builds, since ambuild routines that
+	 * support parallel builds must work these details out for themselves.)
+	 */
+	Assert(snapshot == SnapshotAny || IsMVCCSnapshot(snapshot));
+	Assert(snapshot == SnapshotAny ? TransactionIdIsValid(OldestXmin) :
+		   !TransactionIdIsValid(OldestXmin));
+	Assert(snapshot == SnapshotAny || !anyvisible);
+
+	/* Publish number of blocks to scan */
+	if (progress)
+	{
+		BlockNumber nblocks;
+
+		if (hscan->rs_base.rs_parallel != NULL)
+		{
+			ParallelBlockTableScanDesc pbscan;
+
+			pbscan = (ParallelBlockTableScanDesc) hscan->rs_base.rs_parallel;
+			nblocks = pbscan->phs_nblocks;
+		}
+		else
+			nblocks = hscan->rs_nblocks;
+
+		pgstat_progress_update_param(PROGRESS_SCAN_BLOCKS_TOTAL,
+									 nblocks);
+	}
+
+	/* set our scan endpoints */
+	if (!allow_sync)
+		heap_setscanlimits(scan, start_blockno, numblocks);
+	else
+	{
+		/* syncscan can only be requested on whole relation */
+		Assert(start_blockno == 0);
+		Assert(numblocks == InvalidBlockNumber);
+	}
+
+	reltuples = 0;
+
+	/*
+	 * Scan all tuples in the base relation.
+	 */
+	while ((heapTuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	{
+		bool		tupleIsAlive;
+
+		CHECK_FOR_INTERRUPTS();
+
+		/* Report scan progress, if asked to. */
+		if (progress)
+		{
+			BlockNumber blocks_done = heapam_scan_get_blocks_done(hscan);
+
+			if (blocks_done != previous_blkno)
+			{
+				pgstat_progress_update_param(PROGRESS_SCAN_BLOCKS_DONE,
+											 blocks_done);
+				previous_blkno = blocks_done;
+			}
+		}
+
+		/*
+		 * When dealing with a HOT-chain of updated tuples, we want to index
+		 * the values of the live tuple (if any), but index it under the TID
+		 * of the chain's root tuple.  This approach is necessary to preserve
+		 * the HOT-chain structure in the heap. So we need to be able to find
+		 * the root item offset for every tuple that's in a HOT-chain.  When
+		 * first reaching a new page of the relation, call
+		 * heap_get_root_tuples() to build a map of root item offsets on the
+		 * page.
+		 *
+		 * It might look unsafe to use this information across buffer
+		 * lock/unlock.  However, we hold ShareLock on the table so no
+		 * ordinary insert/update/delete should occur; and we hold pin on the
+		 * buffer continuously while visiting the page, so no pruning
+		 * operation can occur either.
+		 *
+		 * In cases with only ShareUpdateExclusiveLock on the table, it's
+		 * possible for some HOT tuples to appear that we didn't know about
+		 * when we first read the page.  To handle that case, we re-obtain the
+		 * list of root offsets when a HOT tuple points to a root item that we
+		 * don't know about.
+		 *
+		 * Also, although our opinions about tuple liveness could change while
+		 * we scan the page (due to concurrent transaction commits/aborts),
+		 * the chain root locations won't, so this info doesn't need to be
+		 * rebuilt after waiting for another transaction.
+		 *
+		 * Note the implied assumption that there is no more than one live
+		 * tuple per HOT-chain --- else we could create more than one index
+		 * entry pointing to the same root tuple.
+		 */
+		if (hscan->rs_cblock != root_blkno)
+		{
+			Page		page = BufferGetPage(hscan->rs_cbuf);
+
+			LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_SHARE);
+			heap_get_root_tuples(page, root_offsets);
+			LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_UNLOCK);
+
+			root_blkno = hscan->rs_cblock;
+		}
+
+		if (snapshot == SnapshotAny)
+		{
+			/* do our own time qual check */
+			bool		indexIt;
+			TransactionId xwait;
+
+	recheck:
+
+			/*
+			 * We could possibly get away with not locking the buffer here,
+			 * since caller should hold ShareLock on the relation, but let's
+			 * be conservative about it.  (This remark is still correct even
+			 * with HOT-pruning: our pin on the buffer prevents pruning.)
+			 */
+			LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_SHARE);
+
+			/*
+			 * The criteria for counting a tuple as live in this block need to
+			 * match what analyze.c's heapam_scan_analyze_next_tuple() does,
+			 * otherwise CREATE INDEX and ANALYZE may produce wildly different
+			 * reltuples values, e.g. when there are many recently-dead
+			 * tuples.
+			 */
+			switch (HeapTupleSatisfiesVacuum(heapTuple, OldestXmin,
+											 hscan->rs_cbuf))
+			{
+				case HEAPTUPLE_DEAD:
+					/* Definitely dead, we can ignore it */
+					indexIt = false;
+					tupleIsAlive = false;
+					break;
+				case HEAPTUPLE_LIVE:
+					/* Normal case, index and unique-check it */
+					indexIt = true;
+					tupleIsAlive = true;
+					/* Count it as live, too */
+					reltuples += 1;
+					break;
+				case HEAPTUPLE_RECENTLY_DEAD:
+
+					/*
+					 * If tuple is recently deleted then we must index it
+					 * anyway to preserve MVCC semantics.  (Pre-existing
+					 * transactions could try to use the index after we finish
+					 * building it, and may need to see such tuples.)
+					 *
+					 * However, if it was HOT-updated then we must only index
+					 * the live tuple at the end of the HOT-chain.  Since this
+					 * breaks semantics for pre-existing snapshots, mark the
+					 * index as unusable for them.
+					 *
+					 * We don't count recently-dead tuples in reltuples, even
+					 * if we index them; see heapam_scan_analyze_next_tuple().
+					 */
+					if (HeapTupleIsHotUpdated(heapTuple))
+					{
+						indexIt = false;
+						/* mark the index as unsafe for old snapshots */
+						// indexInfo->ii_BrokenHotChain = true;
+					}
+					else
+						indexIt = true;
+					/* In any case, exclude the tuple from unique-checking */
+					tupleIsAlive = false;
+					break;
+				case HEAPTUPLE_INSERT_IN_PROGRESS:
+
+					/*
+					 * In "anyvisible" mode, this tuple is visible and we
+					 * don't need any further checks.
+					 */
+					if (anyvisible)
+					{
+						indexIt = true;
+						tupleIsAlive = true;
+						reltuples += 1;
+						break;
+					}
+
+					/*
+					 * Since caller should hold ShareLock or better, normally
+					 * the only way to see this is if it was inserted earlier
+					 * in our own transaction.  However, it can happen in
+					 * system catalogs, since we tend to release write lock
+					 * before commit there.  Give a warning if neither case
+					 * applies.
+					 */
+					xwait = HeapTupleHeaderGetXmin(heapTuple->t_data);
+					if (!TransactionIdIsCurrentTransactionId(xwait))
+					{
+						if (!is_system_catalog)
+							elog(WARNING, "concurrent insert in progress within table \"%s\"",
+								 RelationGetRelationName(heapRelation));
+						
+					}
+					else
+					{
+						/*
+						 * For consistency with
+						 * heapam_scan_analyze_next_tuple(), count
+						 * HEAPTUPLE_INSERT_IN_PROGRESS tuples as live only
+						 * when inserted by our own transaction.
+						 */
+						reltuples += 1;
+					}
+
+					/*
+					 * We must index such tuples, since if the index build
+					 * commits then they're good.
+					 */
+					indexIt = true;
+					tupleIsAlive = true;
+					break;
+				case HEAPTUPLE_DELETE_IN_PROGRESS:
+
+					/*
+					 * As with INSERT_IN_PROGRESS case, this is unexpected
+					 * unless it's our own deletion or a system catalog; but
+					 * in anyvisible mode, this tuple is visible.
+					 */
+					if (anyvisible)
+					{
+						indexIt = true;
+						tupleIsAlive = false;
+						reltuples += 1;
+						break;
+					}
+
+					xwait = HeapTupleHeaderGetUpdateXid(heapTuple->t_data);
+					if (!TransactionIdIsCurrentTransactionId(xwait))
+					{
+						if (!is_system_catalog)
+							elog(WARNING, "concurrent delete in progress within table \"%s\"",
+								 RelationGetRelationName(heapRelation));
+
+						/*
+						 * If we are performing uniqueness checks, assuming
+						 * the tuple is dead could lead to missing a
+						 * uniqueness violation.  In that case we wait for the
+						 * deleting transaction to finish and check again.
+						 *
+						 * Also, if it's a HOT-updated tuple, we should not
+						 * index it but rather the live tuple at the end of
+						 * the HOT-chain.  However, the deleting transaction
+						 * could abort, possibly leaving this tuple as live
+						 * after all, in which case it has to be indexed. The
+						 * only way to know what to do is to wait for the
+						 * deleting transaction to finish and check again.
+						 */
+						if (HeapTupleIsHotUpdated(heapTuple))
+						{
+							/*
+							 * Must drop the lock on the buffer before we wait
+							 */
+							LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_UNLOCK);
+							XactLockTableWait(xwait, heapRelation,
+											  &heapTuple->t_self,
+											  XLTW_InsertIndexUnique);
+							CHECK_FOR_INTERRUPTS();
+							goto recheck;
+						}
+
+						/*
+						 * Otherwise index it but don't check for uniqueness,
+						 * the same as a RECENTLY_DEAD tuple.
+						 */
+						indexIt = true;
+
+						/*
+						 * Count HEAPTUPLE_DELETE_IN_PROGRESS tuples as live,
+						 * if they were not deleted by the current
+						 * transaction.  That's what
+						 * heapam_scan_analyze_next_tuple() does, and we want
+						 * the behavior to be consistent.
+						 */
+						reltuples += 1;
+					}
+					else if (HeapTupleIsHotUpdated(heapTuple))
+					{
+						/*
+						 * It's a HOT-updated tuple deleted by our own xact.
+						 * We can assume the deletion will commit (else the
+						 * index contents don't matter), so treat the same as
+						 * RECENTLY_DEAD HOT-updated tuples.
+						 */
+						indexIt = false;
+						/* mark the index as unsafe for old snapshots */
+						// indexInfo->ii_BrokenHotChain = true;
+					}
+					else
+					{
+						/*
+						 * It's a regular tuple deleted by our own xact. Index
+						 * it, but don't check for uniqueness nor count in
+						 * reltuples, the same as a RECENTLY_DEAD tuple.
+						 */
+						indexIt = true;
+					}
+					/* In any case, exclude the tuple from unique-checking */
+					tupleIsAlive = false;
+					break;
+				default:
+					elog(ERROR, "unexpected HeapTupleSatisfiesVacuum result");
+					indexIt = tupleIsAlive = false; /* keep compiler quiet */
+					break;
+			}
+
+			LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_UNLOCK);
+
+			if (!indexIt)
+				continue;
+		}
+		else
+		{
+			/* heap_getnext did the time qual check */
+			tupleIsAlive = true;
+			reltuples += 1;
+		}
+
+	}
+
+	table_endscan(scan);
+
+	/* we can now forget our snapshot, if set and registered by us */
+	if (need_unregister_snapshot)
+		UnregisterSnapshot(snapshot);
+
+
+	return reltuples;
+}
+
 static void
 heapam_index_validate_scan(Relation heapRelation,
 						   Relation indexRelation,
@@ -2542,6 +2968,10 @@ SampleHeapTupleVisible(TableScanDesc scan, Buffer buffer,
  * ------------------------------------------------------------------------
  */
 
+/**
+ * Yuxin Tang
+ * 2023.12.7
+*/
 static const TableAmRoutine heapam_methods = {
 	.type = T_TableAmRoutine,
 
@@ -2571,6 +3001,7 @@ static const TableAmRoutine heapam_methods = {
 	.tuple_delete = heapam_tuple_delete,
 	.tuple_update = heapam_tuple_update,
 	.tuple_lock = heapam_tuple_lock,
+	// .tuple_count = heapam_range_scan,
 
 	.tuple_fetch_row_version = heapam_fetch_row_version,
 	.tuple_get_latest_tid = heap_get_latest_tid,

@@ -1521,7 +1521,7 @@ CacheRegisterSyscacheCallback(int cacheid,
 							  Datum arg)
 {
 	if (cacheid < 0 || cacheid >= SysCacheSize)
-		elog(FATAL, "invalid cache ID: %d", cacheid);
+		elog(FATAL, "tyx6 invalid cache ID: %d", cacheid);
 	if (syscache_callback_count >= MAX_SYSCACHE_CALLBACKS)
 		elog(FATAL, "out of syscache_callback_list slots");
 
@@ -1582,7 +1582,7 @@ CallSyscacheCallbacks(int cacheid, uint32 hashvalue)
 	int			i;
 
 	if (cacheid < 0 || cacheid >= SysCacheSize)
-		elog(ERROR, "invalid cache ID: %d", cacheid);
+		elog(ERROR, "tyx5 invalid cache ID: %d  sysCachesize = %d", cacheid,SysCacheSize);
 
 	i = syscache_callback_links[cacheid] - 1;
 	while (i >= 0)

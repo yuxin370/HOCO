@@ -35,7 +35,11 @@
 
 #include <limits.h>
 #include <string.h>
+#include "varatt.h"
 #include "common/rle_compress.h"
+#include "catalog/pg_compression_index.h"
+#include "catalog/pg_max_comp_index_pointer.h"
+
 
 /* ----------
  * Local definitions
@@ -90,13 +94,15 @@ const RLE_Strategy *const RLE_strategy_default = &rle_default_strategy;
 /**
  * rle_compress -
  * 
+ * 2024.1.2
+ * Yuxin Tang updated
+ * 
  *            Compress Source into dest. 
  *            Return the number of bytes written in buffer dest, 
  *            or -1 if compression fails.
 */
 int32 rle_compress(const char *source, int32 slen, char *dest,
-                    const RLE_Strategy *strategy){
-    
+                    const RLE_Strategy *strategy,Oid oid, int32 tuples){
 	const char *dp = source;                            //uncompressed data
 	const char *dend = source + slen;                   //end of uncompressed data
 	unsigned char *bp = (unsigned char *) dest;         //compressed data
@@ -142,12 +148,37 @@ int32 rle_compress(const char *source, int32 slen, char *dest,
 		result_max = (slen * (100 - need_rate)) / 100;
     
 
+    /**
+     * we create an index records for *approximately* every 1000 bit compressed results 
+    */
+    int gap_size = 1000;
+    int index_count_max = result_max/gap_size;
+    index_pair *index = (index_pair *)palloc(sizeof(index_pair) * index_count_max);
+    memset(index,0,sizeof(index_pair) * index_count_max);
+    int32 stored_count = 0;
+    int bp_add_size = 0;
+    int dp_add_size = 0;
+
+    /**
+     * record index info in the begining of the result.
+    */
+    for(int i = 0 ; i < 4; i ++){
+        *bp = (char)((tuples >> (i*8)) & 0xFF);
+        bp ++;
+    }
+
+    for(int i = 0 ; i < 4; i ++){
+        *bp = (char)((oid >> (i*8)) & 0xFF);
+        bp ++;
+    }
+
+
     while (THRESHOLD <= dend - dp){
         /**
          * if we already exceed the maximum result size, fail.
         */
         if(bp - bstart >= result_max) return -1;
-        cur_index = 0;
+        cur_index = 0; /** consequent repeated size */
         if((*(dp + cur_index)) == (*(dp+cur_index+1))){
             if((*(dp+cur_index+1)) == (*(dp+cur_index+2))){
                 cur_index ++;
@@ -155,17 +186,35 @@ int32 rle_compress(const char *source, int32 slen, char *dest,
                     cur_index ++;
                 }
                 if(buf!=buf_base){
+                    bp_add_size += buf - buf_base + 1; 
+                    dp_add_size += buf - buf_base;
                     store_single_buf(bp,buf_base,buf,false);
+                    if(bp_add_size/gap_size > stored_count && stored_count < index_count_max){
+                        index[stored_count].compress_offset = bp_add_size;
+                        index[stored_count].uncompress_offset = dp_add_size;
+                        stored_count++;
+                    }
                 }
                 cur_char = *dp;
                 while (cur_index > 0)
                 {
+
+                    bp_add_size += 2;
+                    dp_add_size += (cur_index + 2) > MAX_REPEATED_SIZE ? MAX_REPEATED_SIZE : (cur_index + 2);
+                    
                     *bp = ((cur_index + 2) > MAX_REPEATED_SIZE ? (MAX_REPEATED_SIZE-THRESHOLD) : (cur_index + 2 - THRESHOLD) ) | (1 << 7) ;
                     bp ++;
                     *bp = cur_char;
                     bp++;
                     dp += (cur_index + 2) > MAX_REPEATED_SIZE ? MAX_REPEATED_SIZE : (cur_index + 2);
+                    
                     cur_index -= MAX_REPEATED_SIZE;
+                    
+                    if(bp_add_size/gap_size > stored_count && stored_count < index_count_max){
+                        index[stored_count].compress_offset = bp_add_size;
+                        index[stored_count].uncompress_offset = dp_add_size;
+                        stored_count++;
+                    }
                 }
             }else{
                 buf_copy_ctrl(buf,dp);
@@ -178,7 +227,16 @@ int32 rle_compress(const char *source, int32 slen, char *dest,
         }
 
         if(buf - buf_base >= MAX_SINGLE_STORE_SIZE){
+            bp_add_size += MAX_SINGLE_STORE_SIZE + 1; 
+            dp_add_size += MAX_SINGLE_STORE_SIZE;
+            
             store_single_buf(bp,buf_base,buf,true);
+            
+            if(bp_add_size/gap_size > stored_count && stored_count < index_count_max){
+                index[stored_count].compress_offset = bp_add_size;
+                index[stored_count].uncompress_offset = dp_add_size;
+                stored_count++;
+            }
         }        
     }
 
@@ -186,16 +244,61 @@ int32 rle_compress(const char *source, int32 slen, char *dest,
     buf += (dend - dp);
 
     if(buf - buf_base >= MAX_SINGLE_STORE_SIZE){
+        bp_add_size += MAX_SINGLE_STORE_SIZE + 1; 
+        dp_add_size += MAX_SINGLE_STORE_SIZE;
+
         store_single_buf(bp,buf_base,buf,true);
+            
+        if(bp_add_size/gap_size > stored_count && stored_count < index_count_max){
+            index[stored_count].compress_offset = bp_add_size;
+            index[stored_count].uncompress_offset = dp_add_size;
+            stored_count++;
+        }
+
+
     }  
 
     if(buf!=buf_base){
+
+        bp_add_size += buf - buf_base + 1; 
+        dp_add_size += buf - buf_base;
+
         store_single_buf(bp,buf_base,buf,false);
+
+        if(bp_add_size/gap_size > stored_count && stored_count < index_count_max ){
+            index[stored_count].compress_offset = bp_add_size;
+            index[stored_count].uncompress_offset = dp_add_size;
+            stored_count++;
+        }
     }
     *bp = '\0';
 
     pfree(buf);
     result_size = bp - bstart;
+    if(result_size + VARHDRSZ_COMPRESSED < slen - 2){
+        /**
+         * which means the source is compressable,
+         * we will store the index table.
+         * otherwise, we give up to store the index table.
+        */
+        for(int id = 0;id < (result_max/gap_size); id++){
+            if(index[id].compress_offset != 0){
+                // printf("id:%d\t%u\t%d\t%d\t%d\n",id,oid,tuples,index[id].compress_offset,index[id].uncompress_offset);
+                InsertCompressionIndex(oid,tuples,index[id].compress_offset,index[id].uncompress_offset);
+            }else{
+                break;
+                // continue;
+            }
+        }
+        if(tuples == 1){
+            // printf("in rle_compress, execute InsertMaxCompIndexPointer(%u,%d)\n",oid,tuples);
+            InsertMaxCompIndexPointer(oid,tuples);
+        }else if(tuples > 1){
+            // printf("in rle_compress, execute UpdateMaxCompIndexPointer(%u,%d)\n",oid,tuples);
+            UpdateMaxCompIndexPointer(oid,tuples);
+        }
+
+    }
     if(result_size >= result_max) return -1;
     return result_size;
 }
@@ -228,7 +331,7 @@ rle_decompress(const char *source, int32 slen, char *dest,
 	srcend = ((const unsigned char *) source) + slen;
 	dp = (unsigned char *) dest;
 	destend = dp + rawsize;
-
+    sp += 8; // the first 8 byte is index info.
 	while (sp < srcend && dp < destend)
 	{
         if((*sp) >= (1<<7)){ 

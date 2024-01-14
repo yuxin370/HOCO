@@ -112,5 +112,10 @@ extern void toast_tuple_cleanup(ToastTupleContext *ttc);
 
 extern void toast_delete_external(Relation rel, Datum *values, bool *isnull,
 								  bool is_speculative);
-
+/**
+ * 2024.1.2
+ * Yuxin Tang
+*/
+extern void toast_delete_compression_index(Relation rel, Datum *values, bool *isnull,
+								  bool is_speculative);
 #endif

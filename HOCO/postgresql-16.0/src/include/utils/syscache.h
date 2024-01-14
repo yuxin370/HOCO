@@ -29,6 +29,11 @@
  *		backend rebuild).
  */
 
+
+/**
+ * Yuxin Tang
+ * 2023.12.1
+*/
 enum SysCacheIdentifier
 {
 	AGGFNOID = 0,
@@ -113,10 +118,13 @@ enum SysCacheIdentifier
 	TYPENAMENSP,
 	TYPEOID,
 	USERMAPPINGOID,
-	USERMAPPINGUSERSERVER
-
-#define SysCacheSize (USERMAPPINGUSERSERVER + 1)
+	USERMAPPINGUSERSERVER,
+	COMPRESSIONINDEXSOURCELOCATION,
+	MAXCOMPINDEXPOINTERSOURCELOCATION
+#define SysCacheSize (MAXCOMPINDEXPOINTERSOURCELOCATION + 1)
 };
+
+// #define SysCacheSize (USERMAPPINGUSERSERVER + 1)
 
 extern void InitCatalogCache(void);
 extern void InitCatalogCachePhase2(void);
