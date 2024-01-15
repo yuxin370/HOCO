@@ -2,6 +2,8 @@
 
 hocotext_sources = files(
     'hocotext.c',
+    'hocotext_rle.c',
+    'hocotext_lz4.c'
 )
 
 if host_system == 'windows'

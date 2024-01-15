@@ -3,7 +3,9 @@
 MODULE_big = hocotext
 OBJS = \
 	$(WIN32RES) \
-	hocotext.o 
+	hocotext.o \
+	hocotext_rle.o\
+	hocotext_lz4.o
 
 EXTENSION = hocotext
 DATA =  hocotext--1.0.sql
