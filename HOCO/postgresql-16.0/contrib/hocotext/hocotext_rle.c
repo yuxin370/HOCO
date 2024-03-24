@@ -2,6 +2,7 @@
  * contrib/hocotext/hocotext_rle.c
 */
 #include "hocotext.h"
+#define THRESHOLD 3
 
 int32 
 hocotext_rle_hoco_cmp(struct varlena * left, 

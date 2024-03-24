@@ -175,7 +175,7 @@ Building and Installation with Autoconf and Make
 Short Version
 
     ./configure
-    (sudo ./configure ICU_CFLAGS='-I/usr/include/unicode' ICU_LIBS='-L/usr/lib/x86_64-linux-gnu -licui18n -licuuc -licudata')
+    (sudo ./configure --with-lz4 ICU_CFLAGS='-I/usr/include/unicode' ICU_LIBS='-L/usr/lib/x86_64-linux-gnu -licui18n -licuuc -licudata')
     make
     su
     make install

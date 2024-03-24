@@ -1,8 +1,8 @@
 /*
  * contrib/hocotext/hocotext.h
  */
-#ifndef HOCOTEXT_HPP
-#define HOCOTEXT_HPP
+#ifndef HOCOTEXT_H
+#define HOCOTEXT_H
 
 #include "postgres.h"
 #include "catalog/pg_collation.h"
@@ -24,7 +24,7 @@
  * utility functions
 */
 
-#define THRESHOLD 3
+
 #define repeat_buf_copy(__dp,__str,__count) \
 do{ \
     for(int i = 0; i < __count; i++){       \
@@ -41,6 +41,7 @@ do{ \
 */
 extern int32 hocotext_hoco_cmp_helper(struct varlena * left, struct varlena * right, Oid collid);
 extern text * hocotext_hoco_extract_helper(struct varlena * source,int32 offset,int32 len,Oid collid);
+extern text * hocotext_hoco_extract_helper_naive(struct varlena * source,int32 offset,int32 len,Oid collid);
 extern text * hocotext_hoco_extract_with_index_optimization_helper(struct varlena * source,int32 offset,int32 len,Oid collid);
 /**
  * ************************************************************
@@ -80,6 +81,10 @@ extern text * hocotext_rle_hoco_extract_with_index_optimization(struct varlena *
  *                    LZ4 UTILITY FUNCTIONS                   *
  * ************************************************************
 */
+extern text * hocotext_lz4_hoco_decompression(struct varlena * source,int32 offset,int32 len,Oid collid);
 extern text * hocotext_lz4_hoco_extract(struct varlena * source,int32 offset,int32 len,Oid collid);
+extern int32 hocotext_lz4_hoco_cmp(struct varlena * left, struct varlena * right, Oid collid);
+// extern int32 hocotext_lz4_get_next_group(char *sp,char *srcend,char *buffer);
+extern text * hocotext_lz4_hoco_extract_naive(struct varlena * source,int32 offset,int32 len,Oid collid);
 
-#endif          /*HOCOTEXT_HPP*/
+#endif          /*HOCOTEXT_H*/

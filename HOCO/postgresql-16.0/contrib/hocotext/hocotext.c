@@ -69,6 +69,31 @@ text * hocotext_hoco_extract_helper(struct varlena * source,int32 offset,int32 l
 	}
 }
 
+text * hocotext_hoco_extract_helper_naive(struct varlena * source,int32 offset,int32 len,Oid collid){
+	ToastCompressionId cmid;
+
+	Assert(VARATT_IS_COMPRESSED(source));
+
+	/*
+	 * Fetch the compression method id stored in the compression header and
+	 * process the data using the appropriate homomorphic computation routine.
+	 */
+
+	cmid = TOAST_COMPRESS_METHOD(source);
+	switch (cmid)
+	{
+		case TOAST_PGLZ_COMPRESSION_ID:
+			return NULL;
+		case TOAST_LZ4_COMPRESSION_ID:
+			return hocotext_lz4_hoco_extract_naive(source,offset,len,collid);
+		case TOAST_RLE_COMPRESSION_ID:
+			return hocotext_rle_hoco_extract(source,offset,len,collid);
+		default:
+			elog(ERROR, "invalid compression method id %d", cmid);
+			return 0;		/* keep compiler quiet */
+	}
+}
+
 text * hocotext_hoco_extract_with_index_optimization_helper(struct varlena * source,int32 offset,int32 len,Oid collid){
 	ToastCompressionId cmid;
 
@@ -190,6 +215,7 @@ PG_FUNCTION_INFO_V1(hocotext_ge); // >=
 
 PG_FUNCTION_INFO_V1(text_extract);
 PG_FUNCTION_INFO_V1(hocotext_extract);
+PG_FUNCTION_INFO_V1(hocotext_extract_naive);
 PG_FUNCTION_INFO_V1(hocotext_extract_optimized);
 PG_FUNCTION_INFO_V1(hocotext_insert);
 PG_FUNCTION_INFO_V1(hocotext_delete);
@@ -519,6 +545,29 @@ hocotext_extract(PG_FUNCTION_ARGS){
     */
     if(VARATT_IS_COMPRESSED(source_str)){
         result = hocotext_hoco_extract_helper(source_str,offset,len,PG_GET_COLLATION());
+    }else{
+        result = hocotext_common_extract(source_str,offset,len,PG_GET_COLLATION());
+    }
+
+
+   PG_FREE_IF_COPY(source,0);
+
+   PG_RETURN_TEXT_P(result);
+}
+
+Datum
+hocotext_extract_naive(PG_FUNCTION_ARGS){
+    struct varlena *source = PG_GETARG_RAW_VARLENA_P(0);
+    int32 offset = PG_GETARG_INT32(1);
+    int32 len = PG_GETARG_INT32(2);
+    text *result = NULL;
+    struct varlena *source_str = (text *) pg_detoast_datum_packed_without_decompression(source);
+    /**
+     * TO DO
+     * extract a substring of length len from the string source at position offset.
+    */
+    if(VARATT_IS_COMPRESSED(source_str)){
+        result = hocotext_hoco_extract_helper_naive(source_str,offset,len,PG_GET_COLLATION());
     }else{
         result = hocotext_common_extract(source_str,offset,len,PG_GET_COLLATION());
     }
